@@ -1,0 +1,648 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  XML Schema Definition for the .dnd4e character file format.
+  Derived from analysis of 20 real .dnd4e files.
+
+  The .dnd4e format stores a complete 4th Edition character including
+  ability scores, stats, powers, equipment, rules element choices, and
+  the full "grant chain" that records how each rules element was acquired.
+
+  Key structural notes:
+    - "Level" is used in TWO contexts: as a tree node under D20Character
+      (complex, containing RulesElements and loot) and as a text element
+      under Details (just the level number).
+    - "Companions" is used in TWO contexts: text-only under Details and
+      as a container (possibly holding a Beast) under CharacterSheet.
+    - RulesElement is recursive: it can contain child RulesElements to
+      represent the grant chain (e.g., Race grants Size, Vision, etc.).
+    - JournalEntry uses xsi:type="AdventureLogEntry" for polymorphism.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified"
+           attributeFormDefault="unqualified">
+
+  <!-- ================================================================== -->
+  <!-- SIMPLE TYPES                                                        -->
+  <!-- ================================================================== -->
+
+  <!-- Legality indicator: every character and rules element is tagged -->
+  <xs:simpleType name="LegalityType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="rules-legal"/>
+      <xs:enumeration value="houserule"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- 4E level range (1-30) -->
+  <xs:simpleType name="LevelRangeType">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="30"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- ================================================================== -->
+  <!-- ROOT ELEMENT: D20Character                                          -->
+  <!-- ================================================================== -->
+
+  <xs:element name="D20Character">
+    <xs:complexType>
+      <xs:sequence>
+        <!-- The single character sheet with all stats, powers, equipment -->
+        <xs:element name="CharacterSheet" type="CharacterSheetType"/>
+
+        <!--
+          Campaign setting reference (often empty name="").
+          May contain whitespace and XML comments in serialized files.
+        -->
+        <xs:element name="D20CampaignSetting">
+          <xs:complexType mixed="true">
+            <xs:attribute name="name" type="xs:string" use="required"/>
+          </xs:complexType>
+        </xs:element>
+
+        <!--
+          Level tree: one Level element per character level (1-30).
+          Each Level contains a RulesElement of type="Level" which holds
+          the grant chain of all choices made at that level, plus any
+          loot acquired at that level.
+        -->
+        <xs:element name="Level" type="LevelTreeType"
+                    minOccurs="1" maxOccurs="30"/>
+
+        <!-- Optional grabbag for pseudo-class / internal grant overrides -->
+        <xs:element name="Grabbag" type="GrabbagType"
+                    minOccurs="0" maxOccurs="1"/>
+
+        <!-- Alternate power/feature choices (e.g., replaced powers) -->
+        <xs:element name="alternate" type="AlternateType"
+                    minOccurs="0" maxOccurs="unbounded"/>
+
+        <!-- Named text strings for UI display, per-level stored values, etc. -->
+        <xs:element name="textstring" type="TextstringType"
+                    minOccurs="0" maxOccurs="unbounded"/>
+      </xs:sequence>
+
+      <!-- game-system is always "D&D4E" -->
+      <xs:attribute name="game-system" type="xs:string" use="required"/>
+      <!-- Version is always "0.07a" in current format -->
+      <xs:attribute name="Version" type="xs:string" use="required"/>
+      <xs:attribute name="legality" type="LegalityType" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ================================================================== -->
+  <!-- CHARACTERSHEET                                                      -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="CharacterSheetType">
+    <xs:sequence>
+      <xs:element name="Details" type="DetailsType"/>
+      <xs:element name="AbilityScores" type="AbilityScoresType"/>
+      <xs:element name="StatBlock" type="StatBlockType"/>
+      <xs:element name="RulesElementTally" type="RulesElementTallyType"/>
+      <xs:element name="LootTally" type="LootTallyType"/>
+      <xs:element name="PowerStats" type="PowerStatsType"/>
+      <!--
+        Companions under CharacterSheet: may contain a Beast companion.
+        NOT the same as the text-only Companions under Details.
+      -->
+      <xs:element name="Companions" type="CompanionsContainerType"/>
+      <xs:element name="Journal" type="JournalType"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- DETAILS — biographical / descriptive information                    -->
+  <!-- All children are text-only elements with no attributes.             -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="DetailsType">
+    <xs:sequence>
+      <xs:element name="name" type="xs:string"/>
+      <!--
+        Level under Details: text content (the level number as a string).
+        This is NOT the same as the Level tree element under D20Character.
+      -->
+      <xs:element name="Level" type="xs:string"/>
+      <xs:element name="Player" type="xs:string"/>
+      <xs:element name="Height" type="xs:string"/>
+      <xs:element name="Weight" type="xs:string"/>
+      <xs:element name="Gender" type="xs:string"/>
+      <xs:element name="Age" type="xs:string"/>
+      <xs:element name="Alignment" type="xs:string"/>
+      <xs:element name="Company" type="xs:string"/>
+      <xs:element name="Portrait" type="xs:string"/>
+      <xs:element name="Experience" type="xs:string"/>
+      <xs:element name="CarriedMoney" type="xs:string"/>
+      <xs:element name="StoredMoney" type="xs:string"/>
+      <xs:element name="Traits" type="xs:string"/>
+      <xs:element name="Appearance" type="xs:string"/>
+      <!--
+        Companions under Details: text-only (companion description).
+        NOT the same as the Companions container under CharacterSheet.
+      -->
+      <xs:element name="Companions" type="xs:string"/>
+      <xs:element name="Notes" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- ABILITY SCORES                                                      -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="AbilityScoresType">
+    <xs:sequence>
+      <xs:element name="Strength" type="AbilityType"/>
+      <xs:element name="Constitution" type="AbilityType"/>
+      <xs:element name="Dexterity" type="AbilityType"/>
+      <xs:element name="Intelligence" type="AbilityType"/>
+      <xs:element name="Wisdom" type="AbilityType"/>
+      <xs:element name="Charisma" type="AbilityType"/>
+    </xs:sequence>
+    <!-- Optional legality override at the ability-scores level -->
+    <xs:attribute name="legality" type="LegalityType"/>
+  </xs:complexType>
+
+  <!-- A single ability score (e.g., Strength score="18") -->
+  <xs:complexType name="AbilityType">
+    <xs:simpleContent>
+      <!--
+        Normally empty, but Beast ability scores may carry text content.
+        Using xs:string extension to allow both empty and text content.
+      -->
+      <xs:extension base="xs:string">
+        <xs:attribute name="score" type="xs:integer" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- STAT BLOCK — computed statistics with modifier breakdowns           -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="StatBlockType">
+    <xs:sequence>
+      <!-- Typically 88-113 stats covering HP, defenses, skills, etc. -->
+      <xs:element name="Stat" type="StatType"
+                  minOccurs="1" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="StatType">
+    <xs:sequence>
+      <!-- Alternate names for this stat (e.g., "AC" for "Armor Class") -->
+      <xs:element name="alias" minOccurs="0" maxOccurs="unbounded">
+        <xs:complexType>
+          <xs:attribute name="name" type="xs:string" use="required"/>
+        </xs:complexType>
+      </xs:element>
+      <!-- Individual modifiers that sum to produce the stat value -->
+      <xs:element name="statadd" type="StataddType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <!-- The computed total value of this stat -->
+    <xs:attribute name="value" type="xs:integer" use="required"/>
+    <!-- The stat's canonical name (e.g., "Armor Class", "Strength") -->
+    <xs:attribute name="name" type="xs:string"/>
+  </xs:complexType>
+
+  <!--
+    Statadd: a single modifier contribution to a stat.
+    Empty element (no children, no text) with a rich attribute model
+    describing the source, conditions, and requirements for this modifier.
+  -->
+  <xs:complexType name="StataddType">
+    <!-- The numeric modifier value (can be negative, can be large e.g. 125000 for XP) -->
+    <xs:attribute name="value" type="xs:integer" use="required"/>
+
+    <!-- Character level at which this modifier applies (1-30) -->
+    <xs:attribute name="Level" type="xs:integer"/>
+
+    <!-- Hex reference to the RulesElement that grants this modifier -->
+    <xs:attribute name="charelem" type="xs:string"/>
+
+    <!-- Name of another stat this modifier is linked to (e.g., ability modifier) -->
+    <xs:attribute name="statlink" type="xs:string"/>
+
+    <!--
+      Bonus type for stacking rules.
+      Common values: "Armor", "trained", "Shield", "Racial", "Power",
+      "Class Feature", "Enhancement", "Feat", "item", "Proficiency", etc.
+    -->
+    <xs:attribute name="type" type="xs:string"/>
+
+    <!-- Flag indicating this statadd uses an ability modifier (value: "true") -->
+    <xs:attribute name="abilmod" type="xs:string"/>
+
+    <!--
+      Prerequisite expression. Examples:
+        "14 level"
+        "!Heal Skill Training"
+        "ID_FMP_CLASS_909"
+        "Epic Tier&amp;ID_FMP_CLASS_5"
+    -->
+    <xs:attribute name="requires" type="xs:string"/>
+
+    <!-- Conditional text (e.g., "against disease", "while bear shape is active") -->
+    <xs:attribute name="conditional" type="xs:string"/>
+
+    <!--
+      Equipment exclusion condition. Examples:
+        "armor:" (any armor), "armor:heavy", "armor:shield",
+        "SLOT:Body", "SLOT:off-hand"
+    -->
+    <xs:attribute name="not-wearing" type="xs:string"/>
+
+    <!--
+      Equipment inclusion condition. Examples:
+        "weapon:heavy blade", "armor:chain",
+        "DUAL-WIELDING:", "DEFENSIVE:", "implement:staff"
+    -->
+    <xs:attribute name="wearing" type="xs:string"/>
+
+    <!--
+      General-purpose string data. Used for height/weight ranges,
+      class IDs, action point descriptions, and other metadata.
+    -->
+    <xs:attribute name="String" type="xs:string"/>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- RULES ELEMENT TALLY — flat list of all rules elements on character  -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="RulesElementTallyType">
+    <xs:sequence>
+      <!-- Typically 82-257 elements; flat list (no nesting in this context) -->
+      <xs:element name="RulesElement" type="RulesElementType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- RULESELEMENT — the core building block (recursive)                  -->
+  <!--                                                                     -->
+  <!-- Represents any character choice: race, class, feat, power, item,    -->
+  <!-- proficiency, grant, etc. Can nest to form the "grant chain."        -->
+  <!--                                                                     -->
+  <!-- Appears in: RulesElementTally, Level tree, loot, Weapon, Grabbag,   -->
+  <!--             alternate, and recursively within itself.               -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="RulesElementType">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <!-- Nested RulesElements forming the grant chain -->
+      <xs:element name="RulesElement" type="RulesElementType"/>
+      <!-- Key-value metadata (name attribute = key, text content = value) -->
+      <xs:element name="specific" type="SpecificType"/>
+    </xs:choice>
+
+    <!-- Display name (can be empty string for internal/grant elements) -->
+    <xs:attribute name="name" type="xs:string" use="required"/>
+
+    <!--
+      Element type. Common values include:
+        "", "Level", "Level1Rules", "Race", "Class", "Feat", "Power",
+        "Skill", "Proficiency", "Grants", "Racial Trait", "Class Feature",
+        "Internal", "Skill Training", "Magic Item", "Weapon", "Armor",
+        "Gear", "Ritual", "Language", "Tier", "Size", "Vision", "Role",
+        "Power Source", "Race Ability Bonus", "Build", "Build Suggestions",
+        "Alignment", "Gender", "Companion", "Category", "CountsAsClass",
+        "CountsAsFeature", "CountsAsRace", "Multiclass", "Background",
+        "Background Association", "Background Choice", "Theme", "Deity",
+        "Domain", "Paragon Path", "Epic Destiny", "Hybrid Class",
+        "Pseudo Class", "Ability Increase (Level 4)", etc.
+      Can be empty string.
+    -->
+    <xs:attribute name="type" type="xs:string" use="required"/>
+
+    <xs:attribute name="legality" type="LegalityType" use="required"/>
+
+    <!--
+      Unique hex identifier for this element instance on this character.
+      Always present on every RulesElement in every context.
+    -->
+    <xs:attribute name="charelem" type="xs:string" use="required"/>
+
+    <!--
+      Stable identifier from the rules database (e.g., "ID_FMP_RACE_2").
+      Present on ~92% of elements; absent for some generated/internal elements.
+    -->
+    <xs:attribute name="internal-id" type="xs:string"/>
+
+    <!-- URL to the online compendium entry for this element -->
+    <xs:attribute name="url" type="xs:string"/>
+
+    <!--
+      Hex charelem of the element this one replaces
+      (used for retraining / alternate choices).
+    -->
+    <xs:attribute name="replaces" type="xs:string"/>
+  </xs:complexType>
+
+  <!-- Key-value specific element (name=key, text=value) -->
+  <xs:complexType name="SpecificType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="name" type="xs:string" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- LOOT TALLY — equipment inventory                                    -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="LootTallyType">
+    <xs:sequence>
+      <xs:element name="loot" type="LootType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!--
+    A single inventory item. count and equip-count can be -1 (consumed/sold),
+    0 (unequipped), 1 (carried/equipped), or higher for stackables.
+  -->
+  <xs:complexType name="LootType">
+    <xs:sequence>
+      <!--
+        1-2 RulesElements: the base item, plus an optional Magic Item overlay.
+        In the Level tree context, loot tracks items acquired at that level.
+      -->
+      <xs:element name="RulesElement" type="RulesElementType"
+                  minOccurs="1" maxOccurs="2"/>
+    </xs:sequence>
+    <!-- Number owned (typically 1; -1 for sold/consumed items) -->
+    <xs:attribute name="count" type="xs:integer" use="required"/>
+    <!-- Number equipped (0 or 1 typically; -1 for special cases) -->
+    <xs:attribute name="equip-count" type="xs:integer" use="required"/>
+    <!-- If 1, show the power card for this item's powers -->
+    <xs:attribute name="ShowPowerCard" type="xs:integer"/>
+    <!-- Item display name -->
+    <xs:attribute name="name" type="xs:string"/>
+    <!-- Weapon damage expression (e.g., "1d8") -->
+    <xs:attribute name="Damage" type="xs:string"/>
+    <!-- Item weight in pounds -->
+    <xs:attribute name="Weight" type="xs:string"/>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- POWER STATS — combat powers with weapon/implement details           -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="PowerStatsType">
+    <xs:sequence>
+      <!-- Typically 9-37 powers (at-will, encounter, daily, utility) -->
+      <xs:element name="Power" type="PowerType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="PowerType">
+    <xs:sequence>
+      <!--
+        1+ specific elements describing the power:
+          "Action Type" — e.g., "Standard Action"
+          "Power Usage" — e.g., "At-Will", "Encounter", "Daily"
+          "Short Description" — brief rules text
+      -->
+      <xs:element name="specific" minOccurs="1" maxOccurs="unbounded">
+        <xs:complexType>
+          <xs:simpleContent>
+            <xs:extension base="xs:string">
+              <xs:attribute name="name" type="xs:string" use="required"/>
+            </xs:extension>
+          </xs:simpleContent>
+        </xs:complexType>
+      </xs:element>
+
+      <!-- Weapon/implement attack configurations for this power (0-9) -->
+      <xs:element name="Weapon" type="WeaponType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="name" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <!--
+    Weapon: a specific weapon/implement configuration for a power,
+    including computed attack bonus, damage, and component breakdowns.
+  -->
+  <xs:complexType name="WeaponType">
+    <xs:sequence>
+      <!--
+        0-2 RulesElements: the weapon/implement item reference, and
+        optionally a magic item overlay or gear reference.
+        Type may be "Weapon", "Magic Item", or "Gear"; may have
+        Category children.
+      -->
+      <xs:element name="RulesElement" type="RulesElementType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+      <!-- Computed attack bonus (integer as text) -->
+      <xs:element name="AttackBonus" type="xs:string"/>
+      <!-- Damage expression (e.g., "1d8+3") or empty -->
+      <xs:element name="Damage" type="xs:string"/>
+      <!--
+        Optional damage type keywords (e.g., "Fire, Radiant").
+        Appears between Damage and AttackStat when present.
+      -->
+      <xs:element name="DamageType" type="xs:string" minOccurs="0"/>
+      <!-- Ability used for the attack roll (e.g., "Strength") -->
+      <xs:element name="AttackStat" type="xs:string"/>
+      <!-- Targeted defense (e.g., "AC", "Reflex") -->
+      <xs:element name="Defense" type="xs:string"/>
+      <!-- Optional healing expression (appears before HitComponents) -->
+      <xs:element name="Healing" type="xs:string" minOccurs="0"/>
+      <!-- Itemized attack bonus breakdown -->
+      <xs:element name="HitComponents" type="xs:string"/>
+      <!-- Itemized damage bonus breakdown -->
+      <xs:element name="DamageComponents" type="xs:string"/>
+      <!-- Optional itemized healing breakdown -->
+      <xs:element name="HealingComponents" type="xs:string" minOccurs="0"/>
+      <!-- Optional conditional text for the attack -->
+      <xs:element name="Conditions" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="name" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- COMPANIONS (CharacterSheet context) — Beast companion container     -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="CompanionsContainerType">
+    <xs:sequence>
+      <xs:element name="Beast" type="BeastType" minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!--
+    Beast companion (e.g., Ranger's beast companion, Sentinel's animal).
+    All children are text-only elements.
+  -->
+  <xs:complexType name="BeastType">
+    <xs:sequence>
+      <!-- Internal ID reference for the beast -->
+      <xs:element name="ID" type="xs:string"/>
+      <!--
+        Beast ability scores as text (NOT the structured AbilityScoresType).
+        This is a different schema from the character's AbilityScores.
+      -->
+      <xs:element name="AbilityScores" type="xs:string"/>
+      <!-- Beast power identifier -->
+      <xs:element name="BeastPower" type="xs:string"/>
+      <!-- Beast power description text -->
+      <xs:element name="BeastPowerText" type="xs:string"/>
+      <xs:element name="Size" type="xs:string"/>
+      <xs:element name="Speed" type="xs:string"/>
+      <xs:element name="Defenses" type="xs:string"/>
+      <xs:element name="HitPoints" type="xs:string"/>
+      <xs:element name="Surges" type="xs:string"/>
+      <xs:element name="AttackBonus" type="xs:string"/>
+      <xs:element name="BasicAttack" type="xs:string"/>
+      <xs:element name="TrainedSkills" type="xs:string"/>
+      <xs:element name="Damage" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- JOURNAL                                                             -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="JournalType">
+    <xs:sequence>
+      <!--
+        Optional adventure log entry. Uses xsi:type="AdventureLogEntry"
+        in instance documents for polymorphic type selection.
+      -->
+      <xs:element name="JournalEntry" type="JournalEntryBase"
+                  minOccurs="0" maxOccurs="1"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!--
+    Base type for JournalEntry. Instance documents use
+    xsi:type="AdventureLogEntry" to select the derived type.
+  -->
+  <xs:complexType name="JournalEntryBase"/>
+
+  <!--
+    AdventureLogEntry: the concrete journal entry type.
+    All children are text-only elements tracking adventure session data.
+  -->
+  <xs:complexType name="AdventureLogEntry">
+    <xs:complexContent>
+      <xs:extension base="JournalEntryBase">
+        <xs:sequence>
+          <xs:element name="TimeStamp" type="xs:string"/>
+          <xs:element name="Title" type="xs:string"/>
+          <xs:element name="LevelAtEnd" type="xs:string"/>
+          <xs:element name="GPTotal" type="xs:string"/>
+          <xs:element name="GPDelta" type="xs:string"/>
+          <xs:element name="GPStart" type="xs:string"/>
+          <xs:element name="XPTotal" type="xs:string"/>
+          <xs:element name="XPGain" type="xs:string"/>
+          <xs:element name="XPStart" type="xs:string"/>
+          <xs:element name="Treasure" type="xs:string"/>
+          <xs:element name="Region" type="xs:string"/>
+          <xs:element name="Notes" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- LEVEL TREE — per-level record of character build choices            -->
+  <!--                                                                     -->
+  <!-- Each Level element contains a RulesElement of type="Level" that     -->
+  <!-- holds the full grant chain for that level's choices, plus any       -->
+  <!-- loot items acquired at that level.                                  -->
+  <!--                                                                     -->
+  <!-- Grant chain nesting (parent -> child types):                        -->
+  <!--   Level -> Race, Class, Feat, Power, Deity, Ability Increase,      -->
+  <!--            Tier, Paragon Path, Epic Destiny, ""                     -->
+  <!--   Race -> Grants, Race Ability Bonus, Language                      -->
+  <!--   Grants -> Size, Vision, Racial Trait, Language, Role,             -->
+  <!--             Power Source, Proficiency, Class Feature, etc.           -->
+  <!--   Class -> Grants, Power, Build, Skill Training, Hybrid Class       -->
+  <!--   Class Feature -> Power, Class Feature, Proficiency, Internal,     -->
+  <!--                    Feat, Companion, CountsAsFeature, Racial Trait   -->
+  <!--   Feat -> Skill Training, CountsAsClass, Multiclass, Proficiency,   -->
+  <!--           Power, Internal, Class Feature, etc.                      -->
+  <!--   Paragon Path / Epic Destiny -> Class Feature, Power               -->
+  <!--   Companion -> Power, Companion (recursive for leveled companions)  -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="LevelTreeType">
+    <xs:sequence>
+      <!-- The level marker RulesElement containing the grant chain -->
+      <xs:element name="RulesElement" type="RulesElementType"/>
+      <!-- Items acquired at this level -->
+      <xs:element name="loot" type="LootType"
+                  minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- GRABBAG — override grants for pseudo-classes and internal rules     -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="GrabbagType">
+    <xs:sequence>
+      <xs:element name="RulesElement" type="RulesElementType"/>
+      <xs:element name="rules">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="grant" minOccurs="1" maxOccurs="unbounded">
+              <xs:complexType>
+                <!--
+                  Grant target name and type.
+                  type is commonly "Internal" or "Pseudo Class".
+                -->
+                <xs:attribute name="name" type="xs:string" use="required"/>
+                <xs:attribute name="type" type="xs:string" use="required"/>
+              </xs:complexType>
+            </xs:element>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- ALTERNATE — alternate power or feature choice (retraining)          -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="AlternateType">
+    <xs:sequence>
+      <!-- The alternate choice RulesElement -->
+      <xs:element name="RulesElement" type="RulesElementType"/>
+    </xs:sequence>
+    <!-- Slot identifier (e.g., "Power Daily 1", "Power Encounter 3") -->
+    <xs:attribute name="SelectName" type="xs:string" use="required"/>
+    <!-- Rules database ID for this alternate -->
+    <xs:attribute name="internal-id" type="xs:string" use="required"/>
+    <!-- Display name of the alternate choice -->
+    <xs:attribute name="name" type="xs:string" use="required"/>
+    <!-- Type of element being replaced ("Class Feature" or "Feat") -->
+    <xs:attribute name="type" type="xs:string" use="required"/>
+  </xs:complexType>
+
+  <!-- ================================================================== -->
+  <!-- TEXTSTRING — named string values for UI and per-level data          -->
+  <!--                                                                     -->
+  <!-- Names follow patterns like:                                         -->
+  <!--   "USAGE_Shield"                                                    -->
+  <!--   "_PER_LEVEL_24_Stored Money"                                      -->
+  <!--   "YOURCLASSNAME_POWERSLOT_Daily 1"                                 -->
+  <!-- ================================================================== -->
+
+  <xs:complexType name="TextstringType">
+    <xs:simpleContent>
+      <xs:extension base="xs:string">
+        <xs:attribute name="name" type="xs:string" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+</xs:schema>

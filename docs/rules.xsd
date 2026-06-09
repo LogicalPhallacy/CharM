@@ -1,0 +1,162 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<xs:schema id="NewDataSet" xmlns="" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+  <xs:element name="D20Rules">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="RulesElement" minOccurs="0" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Category" type="xs:string" minOccurs="0" msdata:Ordinal="0" />
+              <xs:element name="Prereqs" type="xs:string" minOccurs="0" msdata:Ordinal="1" />
+              <xs:element name="print-prereqs" type="xs:string" minOccurs="0" msdata:Ordinal="2" />
+              <xs:element name="Flavor" type="xs:string" minOccurs="0" msdata:Ordinal="3" />
+              <xs:element name="prereqs" type="xs:string" minOccurs="0" msdata:Ordinal="5" />
+              <xs:element name="flavor" type="xs:string" minOccurs="0" msdata:Ordinal="6" />
+              <xs:element name="specific" nillable="true" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:simpleContent msdata:ColumnName="specific_Text" msdata:Ordinal="1">
+                    <xs:extension base="xs:string">
+                      <xs:attribute name="name" type="xs:string" />
+                    </xs:extension>
+                  </xs:simpleContent>
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="rules" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="grant" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="type" type="xs:string" />
+                        <xs:attribute name="Level" type="xs:string" />
+                        <xs:attribute name="requires" type="xs:string" />
+                        <xs:attribute name="level" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="statadd" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="value" type="xs:string" />
+                        <xs:attribute name="requires" type="xs:string" />
+                        <xs:attribute name="half-point" type="xs:string" />
+                        <xs:attribute name="condition" type="xs:string" />
+                        <xs:attribute name="type" type="xs:string" />
+                        <xs:attribute name="wearing" type="xs:string" />
+                        <xs:attribute name="non-zero" type="xs:string" />
+                        <xs:attribute name="not-wearing" type="xs:string" />
+                        <xs:attribute name="zero" type="xs:string" />
+                        <xs:attribute name="statmin" type="xs:string" />
+                        <xs:attribute name="Type" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="textstring" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="value" type="xs:string" />
+                        <xs:attribute name="condition" type="xs:string" />
+                        <xs:attribute name="requires" type="xs:string" />
+                        <xs:attribute name="wearing" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="select" nillable="true" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:simpleContent msdata:ColumnName="select_Text" msdata:Ordinal="14">
+                          <xs:extension base="xs:string">
+                            <xs:attribute name="type" type="xs:string" />
+                            <xs:attribute name="number" type="xs:string" />
+                            <xs:attribute name="Category" type="xs:string" />
+                            <xs:attribute name="optional" type="xs:string" />
+                            <xs:attribute name="name" type="xs:string" />
+                            <xs:attribute name="Level" type="xs:string" />
+                            <xs:attribute name="requires" type="xs:string" />
+                            <xs:attribute name="spellbook" type="xs:string" />
+                            <xs:attribute name="Prepare" type="xs:string" />
+                            <xs:attribute name="existing" type="xs:string" />
+                            <xs:attribute name="default" type="xs:string" />
+                            <xs:attribute name="grant" type="xs:string" />
+                            <xs:attribute name="category" type="xs:string" />
+                            <xs:attribute name="level" type="xs:string" />
+                          </xs:extension>
+                        </xs:simpleContent>
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="replace" nillable="true" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:simpleContent msdata:ColumnName="replace_Text" msdata:Ordinal="8">
+                          <xs:extension base="xs:string">
+                            <xs:attribute name="name" type="xs:string" />
+                            <xs:attribute name="requires" type="xs:string" />
+                            <xs:attribute name="Level" type="xs:string" />
+                            <xs:attribute name="multiclass" type="xs:string" />
+                            <xs:attribute name="optional" type="xs:string" />
+                            <xs:attribute name="power-replace" type="xs:string" />
+                            <xs:attribute name="powerswap" type="xs:string" />
+                            <xs:attribute name="retrain" type="xs:string" />
+                          </xs:extension>
+                        </xs:simpleContent>
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="modify" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="field" type="xs:string" />
+                        <xs:attribute name="value" type="xs:string" />
+                        <xs:attribute name="type" type="xs:string" />
+                        <xs:attribute name="Field" type="xs:string" />
+                        <xs:attribute name="list-addition" type="xs:string" />
+                        <xs:attribute name="select" type="xs:string" />
+                        <xs:attribute name="requires" type="xs:string" />
+                        <xs:attribute name="wearing" type="xs:string" />
+                        <xs:attribute name="die-increase" type="xs:string" />
+                        <xs:attribute name="Requires" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="drop" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="select" type="xs:string" />
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="type" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="suggest" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="type" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="statalias" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="alias" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                    <xs:element name="Grant" minOccurs="0" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:attribute name="name" type="xs:string" />
+                        <xs:attribute name="type" type="xs:string" />
+                        <xs:attribute name="requires" type="xs:string" />
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="internal-id" type="xs:string" />
+            <xs:attribute name="name" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="source" type="xs:string" />
+            <xs:attribute name="revision-date" type="xs:string" />
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="game-system" type="xs:string" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="NewDataSet" msdata:IsDataSet="true" msdata:UseCurrentLocale="true">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element ref="D20Rules" />
+      </xs:choice>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>
