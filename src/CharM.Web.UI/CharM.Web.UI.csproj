@@ -106,6 +106,20 @@
                   DestinationFileName="three.module.js" />
   </Target>
 
+  <!--
+    Register the build-time-generated wwwroot assets (tailwind.css,
+    three.module.js) as explicit Content items so the Razor SDK's static
+    web asset pipeline always sees them.
+    -->
+  <Target Name="_RegisterGeneratedStaticWebAssets"
+          BeforeTargets="ResolveProjectStaticWebAssets"
+          DependsOnTargets="BuildTailwindCss;DownloadThreeJs">
+    <ItemGroup>
+      <Content Remove="wwwroot\tailwind.css" />
+      <Content Remove="wwwroot\js\three.module.js" />
+      <Content Include="wwwroot\tailwind.css" Condition="Exists('$(TailwindOutput)')" />
+      <Content Include="wwwroot\js\three.module.js" Condition="Exists('$(ThreeOutputPath)')" />
+    </ItemGroup>
+  </Target>
+
 </Project>
-
-
