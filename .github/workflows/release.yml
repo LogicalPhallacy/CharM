@@ -48,8 +48,8 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Install maui-android workload
-        run: dotnet workload install maui-android --skip-manifest-update
+      - name: Install android workload
+        run: dotnet workload install android maui-android
 
       - name: Build Android APK
         shell: pwsh
