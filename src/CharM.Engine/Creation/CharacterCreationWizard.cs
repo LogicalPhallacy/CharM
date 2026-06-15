@@ -259,8 +259,20 @@ public sealed partial class CharacterCreationWizard : ICharacterState
 
         if (!skipPrereqs)
         {
-            // Pass full character state — level, ability scores, element presence
-            var prereqFilter = _legalityChecker.CreatePrereqFilter(this);
+            // Slot-level-aware prereq filter: feat slots for L1/L2/L4/...
+            // on a paragon+ character must NOT offer paragon-tier feats.
+            // The "Paragon Tier" / "Epic Tier" Internal elements are
+            // granted globally at L11/L21 and stay granted, so a naive
+            // HasElement check passes them for every slot. Wrap the
+            // wizard state in a SlotLevelState that pins Level and
+            // gates the tier elements to the slot's effective level.
+            int effectiveLevel = slot.Level is int lvl && lvl > 0
+                ? Math.Min(lvl, Level)
+                : Level;
+            ICharacterState prereqState = effectiveLevel < Level
+                ? new SlotLevelState(this, effectiveLevel)
+                : this;
+            var prereqFilter = _legalityChecker.CreatePrereqFilter(prereqState);
             candidates = candidates.Where(prereqFilter);
         }
 

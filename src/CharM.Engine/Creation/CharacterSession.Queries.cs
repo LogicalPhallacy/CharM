@@ -161,8 +161,22 @@ public sealed partial class CharacterSession
             .Where(CompanionData.IsFamiliarPower)
             .ToList();
 
+        // Associate-typed inventory entries (Sentinel druid Living Zephyr,
+        // Heroes of the Feywild Dire Bear, etc.). OCB stores these as
+        // <RulesElement type="Associate"> inside <LootTally> — NOT in the
+        // active element tree — so we have to scan _inventory instead of
+        // allElements. The structured stat block lives on a matching
+        // Power card (same Name, typically with internal-id
+        // ID_TIV_COMPANION_<NAME> or similar) which IS in the element
+        // tree when the granting class feature is active.
+        var associates = _inventory
+            .Select(i => i.Item.Base)
+            .Where(e => string.Equals(e.Type, "Associate", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
         if (baseCompanions.Count == 0 && animalMasterPowers.Count == 0
-            && summonPowers.Count == 0 && familiarPowers.Count == 0)
+            && summonPowers.Count == 0 && familiarPowers.Count == 0
+            && associates.Count == 0)
             return Array.Empty<CompanionData>();
 
         string? name = TextStrings.GetValueOrDefault("_COMPANION_NAME");
@@ -207,6 +221,24 @@ public sealed partial class CharacterSession
         foreach (var familiar in familiarPowers)
         {
             result.Add(CompanionData.FromFamiliarPower(familiar));
+        }
+
+        foreach (var associate in associates)
+        {
+            // Match the Associate to its structured Power card by Name.
+            // ID_TIV_COMPANION_LIVING_ZEPHYR (Power) ↔ ID_FMP_ASSOCIATE_64
+            // (Associate, "Living Zephyr") — only the Name is reliable
+            // across the two id families.
+            var powerCard = allElements.FirstOrDefault(e =>
+                string.Equals(e.Type, "Power", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(e.Name, associate.Name, StringComparison.OrdinalIgnoreCase));
+
+            result.Add(CompanionData.FromAssociate(
+                associate,
+                powerCard,
+                snapshot.Builder.Overlay,
+                customName: name,
+                customAppearance: appearance));
         }
 
         // OCB iterates ALL active type="Companion" CharElements when emitting

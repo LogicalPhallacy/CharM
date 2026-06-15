@@ -1,4 +1,5 @@
 @using CharM.Engine.Creation
+@using CharM.Engine.Prerequisites
 @using CharM.Engine.Rules
 @using CharM.Web.Services
 
@@ -49,7 +50,7 @@
 
         @if (ShowPrereqs(Element))
         {
-            var displayPrereqs = Element.Fields.GetValueOrDefault("print-prereqs") ?? Element.Prereqs;
+            var displayPrereqs = ResolvePrereqText(Element);
             <div class="mt-3">
                 <span class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant">Prerequisites</span>
                 <p class="text-sm text-on-surface mt-0.5">@displayPrereqs</p>
@@ -65,7 +66,7 @@
 
         @if (ShowPrereqs(Element))
         {
-            var displayPrereqs = Element.Fields.GetValueOrDefault("print-prereqs") ?? Element.Prereqs;
+            var displayPrereqs = ResolvePrereqText(Element);
             <div class="mt-3">
                 <span class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant">Prerequisites</span>
                 <p class="text-sm text-on-surface mt-0.5">@displayPrereqs</p>
@@ -152,6 +153,20 @@
     public static bool ShowPrereqs(RulesElement element)
         => !string.IsNullOrWhiteSpace(element.Prereqs)
            && !_hidePrereqTypes.Contains(element.Type);
+
+    /// <summary>
+    /// Resolve an element's prereqs to display-ready plain text. Falls
+    /// back to the raw <c>Prereqs</c> string only when there is no
+    /// resolver available AND no <c>print-prereqs</c> field — never
+    /// shows raw <c>ID_*</c> tokens to the user when we can avoid it.
+    /// </summary>
+    private string ResolvePrereqText(RulesElement element)
+    {
+        return PrereqDisplay.Format(element, OnLoadDetails)
+            ?? element.Fields.GetValueOrDefault("print-prereqs")
+            ?? element.Prereqs
+            ?? string.Empty;
+    }
 
     public static string FriendlyFieldName(string fieldKey) => fieldKey switch
     {

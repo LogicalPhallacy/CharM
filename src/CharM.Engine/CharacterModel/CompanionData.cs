@@ -405,6 +405,128 @@ public sealed record CompanionData(
             IsFamiliar: true);
     }
 
+    /// <summary>
+    /// Build a <see cref="CompanionData"/> for a <c>type="Associate"</c>
+    /// inventory entry. Sentinel druid companions (Living Zephyr, Flame
+    /// Zephyr, etc.) and similar "I bring this creature along" picks
+    /// from Heroes of the Elemental Chaos / Feywild ship as
+    /// <c>&lt;RulesElement type="Associate"&gt;</c> inside
+    /// <c>&lt;LootTally&gt;</c>, NOT as <c>type="Companion"</c> elements
+    /// like the Hunter / Druid Cat-Wolf-Bear family. They typically
+    /// pair with an identically-named <c>Power</c> element that carries
+    /// the structured stat block (Ability Scores, Defenses, Hit Points,
+    /// Speed, named action fields). When that Power is active on the
+    /// character we prefer it for the structured fields; otherwise we
+    /// fall back to parsing the Associate's free-text Description blob.
+    /// </summary>
+    public static CompanionData FromAssociate(
+        RulesElement associate,
+        RulesElement? powerCard,
+        ModifyOverlay? overlay,
+        string? customName,
+        string? customAppearance)
+    {
+        // Prefer the Power card's structured "Defenses" / "Hit Points"
+        // fields. Both can carry descriptive (rather than numeric) text
+        // (e.g. "Your bloodied value", "Add your level to each defense");
+        // in that case ParseDefenses returns Empty and we surface the
+        // raw text via DefensesText / HitPointsText.
+        string? defensesField = GetOverlaidField(powerCard, overlay, "Defenses");
+        var defenses = ParseDefenses(defensesField);
+
+        string? rawHp = GetOverlaidField(powerCard, overlay, "Hit Points");
+        int? hp = ParseInt(rawHp);
+        string? hpText = hp is null ? NullIfBlank(rawHp) : null;
+
+        var abilities = ParseAbilityScores(
+            GetOverlaidField(powerCard, overlay, "Ability Scores")
+            ?? associate.Fields.GetValueOrDefault("Description"));
+
+        string? speed = NullIfBlank(GetOverlaidField(powerCard, overlay, "Speed"));
+        string? size = ExtractCreatureSize(
+            GetOverlaidField(powerCard, overlay, "Summoned Creature")
+            ?? GetOverlaidField(powerCard, overlay, "Size"));
+        string? vision = NullIfBlank(
+            GetOverlaidField(powerCard, overlay, "Perception")
+            ?? GetOverlaidField(powerCard, overlay, "Senses"));
+
+        // Pick the first attack-style field as the headline attack line.
+        // Associate stat blocks use names like "Animal Attack (At-Will)",
+        // "Standard Action (At-Will * Fire)", etc.; ParseExtraPowers
+        // picks them all up but we want the first one inline on the
+        // mini-sheet too.
+        string? attackText = null;
+        var extraPowers = powerCard is not null
+            ? ParseExtraPowers(powerCard)
+            : Array.Empty<CompanionExtraPower>();
+        if (extraPowers.Count > 0)
+        {
+            attackText = extraPowers[0].Name;
+        }
+
+        return new CompanionData(
+            Category: associate.Name,
+            Name: NullIfBlank(customName),
+            Appearance: NullIfBlank(customAppearance),
+            Strength: abilities.GetValueOrDefault("Strength", 10),
+            Constitution: abilities.GetValueOrDefault("Constitution", 10),
+            Dexterity: abilities.GetValueOrDefault("Dexterity", 10),
+            Intelligence: abilities.GetValueOrDefault("Intelligence", 10),
+            Wisdom: abilities.GetValueOrDefault("Wisdom", 10),
+            Charisma: abilities.GetValueOrDefault("Charisma", 10),
+            Ac: defenses.Ac,
+            Fortitude: defenses.Fortitude,
+            Reflex: defenses.Reflex,
+            Will: defenses.Will,
+            DefensesText: defenses.IsEmpty ? NullIfBlank(defensesField) : null,
+            HitPoints: hp,
+            HitPointsText: hpText,
+            HitPointsNote: null,
+            HealingSurgeText: null,
+            AttackBonus: null,
+            AttackText: attackText,
+            Damage: null,
+            Size: size,
+            Speed: speed,
+            Vision: vision,
+            TrainedSkills: Array.Empty<string>(),
+            PowerName: null,
+            PowerText: powerCard is null
+                ? NullIfBlank(associate.Fields.GetValueOrDefault("Description"))
+                : null,
+            ExtraPowers: extraPowers,
+            IsMinion: false,
+            IsSummon: false,
+            AnchorPowerInternalId: powerCard?.InternalId);
+    }
+
+    private static Dictionary<string, int> ParseAbilityScores(string? source)
+    {
+        var abilities = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(source))
+            return abilities;
+
+        foreach (Match m in AbilityPattern.Matches(source))
+        {
+            string abbr = m.Groups[1].Value;
+            if (int.TryParse(m.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int score))
+                abilities[ExpandAbilityName(abbr)] = score;
+        }
+        return abilities;
+    }
+
+    private static string? ExtractCreatureSize(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var sizes = new[] { "Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan" };
+        foreach (var size in sizes)
+        {
+            if (text.Contains(size, StringComparison.OrdinalIgnoreCase))
+                return text.Trim();
+        }
+        return null;
+    }
+
     private static string? ComposeFamiliarSpeed(RulesElement power)
     {
         var primary = power.Fields.GetValueOrDefault("Speed");
@@ -657,7 +779,7 @@ public sealed record CompanionData(
     };
 
     private static readonly Regex AbilityPattern = new(
-        @"\b(Str|Con|Dex|Int|Wis|Cha)\s+(\d+)\b",
+        @"\b(Str|Con|Dex|Int|Wis|Cha):?\s+(\d+)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>Compute the ability modifier (4e: floor((score - 10) / 2)).</summary>

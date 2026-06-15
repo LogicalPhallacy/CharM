@@ -118,9 +118,14 @@ else
                 @foreach (var choice in displayPendingChoices.Take(12))
                 {
                     bool isSkippable = IsSkippableChoice(choice);
+                    string? slotLevelBadge = SlotLevelBadge(choice);
                     <div class="flex items-center gap-0.5">
                         <button @onclick="() => OpenSelectionModal(choice)"
                                 class="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-lowest rounded-l ghost-border hover:bg-surface-container-low transition-colors text-left scale-98-active text-sm">
+                            @if (slotLevelBadge is not null)
+                            {
+                                <span class="text-xs font-label uppercase tracking-wider text-on-surface-variant">@slotLevelBadge</span>
+                            }
                             <span class="font-label font-semibold text-on-surface">@choice.Description</span>
                             @if (choice.Slot.Number > 1)
                             {
@@ -1598,9 +1603,30 @@ else
         || elementType.Equals("Campaign Setting", StringComparison.OrdinalIgnoreCase)
         || elementType.Equals("Companion", StringComparison.OrdinalIgnoreCase);
 
+    // Paragon Path / Epic Destiny are flagged Optional in the rules data
+    // (so the wizard only surfaces them at the right tier) but are required
+    // picks once the character has reached the tier — the dismiss button
+    // would let users leave them unfilled, producing an incomplete sheet.
+    private static bool IsRequiredType(string elementType) =>
+        elementType.Equals("Paragon Path", StringComparison.OrdinalIgnoreCase)
+        || elementType.Equals("Epic Destiny", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsSkippableChoice(PendingChoice choice) =>
-        choice.Slot.Optional
-        || IsSkippableType(choice.Slot.ElementType);
+        !IsRequiredType(choice.Slot.ElementType)
+        && (choice.Slot.Optional || IsSkippableType(choice.Slot.ElementType));
+
+    // Choices created at a specific character level (most commonly feat
+    // slots at L1/L2/L4/...) carry that level on the underlying select
+    // directive. Surfacing it as a small "Lvl N" badge in the pending-
+    // choices list makes it obvious which slot the user is picking for —
+    // a fresh L11+ character otherwise sees N identical "Choose Feat"
+    // entries with no way to tell L1 from L11.
+    private static string? SlotLevelBadge(PendingChoice choice)
+    {
+        if (choice.Slot.Level is not int level || level <= 0)
+            return null;
+        return $"Lvl {level}";
+    }
 
     private static IEnumerable<PendingChoice> OrderPendingChoices(IReadOnlyList<PendingChoice> choices)
         => choices
