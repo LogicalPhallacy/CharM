@@ -737,6 +737,23 @@ else
                             companionGroups.Add((beast, null, null));
                             if (beast.IsMinion || beast.IsSummon) continue;
 
+                            // Associate-backed companions (Living Zephyr etc.)
+                            // store their actions in the rules DB fields, which
+                            // ParseExtraPowers already surfaced on the mini-sheet.
+                            // The paired Power element is a companion stat block
+                            // with no standard power-card content (Hit/Effect/
+                            // Attack Type) — rendering it produces an empty card.
+                            // Skip the paired card when the mini-sheet already
+                            // carries the content via ExtraPowers.
+                            if (beast.ExtraPowers.Count > 0)
+                            {
+                                // Still mark the anchor as rendered so it doesn't
+                                // show up in the unpaired-cards list.
+                                if (beast.AnchorPowerInternalId is not null)
+                                    renderedAttackCards.Add(beast.AnchorPowerInternalId);
+                                continue;
+                            }
+
                             var attackCard = companionCards.FirstOrDefault(c =>
                                 beast.AnchorPowerInternalId is not null
                                 && string.Equals(c.InternalId, beast.AnchorPowerInternalId, StringComparison.OrdinalIgnoreCase));
