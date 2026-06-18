@@ -191,6 +191,14 @@
     [Parameter] public Func<string, List<ResolvedElement>>? OnResolveIds { get; set; }
     /// <summary>InternalIds of candidates the rules engine flagged as suggested for this slot.</summary>
     [Parameter] public IReadOnlySet<string>? RecommendedIds { get; set; }
+    /// <summary>
+    /// Active character session, used for context-aware candidate
+    /// grouping (currently: feat picks bucket into Class Feats /
+    /// General / Weapon &amp; Implement Mastery based on the
+    /// character's class-identity elements). When null, the modal
+    /// falls back to its default category-based grouping.
+    /// </summary>
+    [Parameter] public CharacterSession? Session { get; set; }
 
     private string _searchText = "";
     private RulesElement? _selectedElement;
@@ -294,7 +302,32 @@
         // pick(s).
         IReadOnlyList<RulesElementPickerGroup> baseGroups;
 
-        if (IsRaceAbilityBonusChoice() || IsSkillTrainingChoice())
+        if (IsFeatChoice() && Session is not null)
+        {
+            // Feat picks bucket into Class Feats / General / Mastery
+            // based on the character's class identity, not the rules
+            // DB's category taxonomy (which is noisy and book-shaped).
+            // See FeatGrouper for detection details.
+            var featBuckets = FeatGrouper.Group(
+                Session,
+                candidates,
+                Array.Empty<RulesElement>());
+
+            var groups = new List<RulesElementPickerGroup>(featBuckets.Count);
+            foreach (var bucket in featBuckets)
+            {
+                var sorted = bucket.Items
+                    .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                groups.Add(new RulesElementPickerGroup(
+                    Key: $"__feat-{bucket.Label}",
+                    Name: bucket.Label,
+                    Candidates: sorted,
+                    IsCategoryBacked: false));
+            }
+            baseGroups = groups;
+        }
+        else if (IsRaceAbilityBonusChoice() || IsSkillTrainingChoice())
         {
             baseGroups =
             [
@@ -375,6 +408,11 @@
     private bool IsPowerChoice()
     {
         return Choice.Slot.ElementType.Equals("Power", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsFeatChoice()
+    {
+        return Choice.Slot.ElementType.Equals("Feat", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool IsRaceAbilityBonusChoice()

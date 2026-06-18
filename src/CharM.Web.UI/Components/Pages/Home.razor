@@ -788,6 +788,7 @@ else
     {
         <SelectionModal Choice="_activeChoice"
                         Candidates="_modalCandidates"
+                        Session="SessionService.Session"
                         RecommendedIds="@(SessionService.Session?.GetSuggestedIdsForSlot(_activeChoice.Slot))"
                         OnSelect="OnElementSelected"
                         OnClose="CloseModal"
