@@ -98,7 +98,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Install maui-maccatalyst workload
-        run: sudo dotnet workload install maui-maccatalyst --version 10.0.203.1
+        run: sudo dotnet workload install maui-maccatalyst --version 10.0.300.3
 
       - name: Build Mac Catalyst app (universal x64 + arm64)
         shell: pwsh
