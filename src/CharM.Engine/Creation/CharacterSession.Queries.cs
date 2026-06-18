@@ -233,12 +233,17 @@ public sealed partial class CharacterSession
                 string.Equals(e.Type, "Power", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(e.Name, associate.Name, StringComparison.OrdinalIgnoreCase));
 
+            // Resolve character HP so "Your bloodied value" can compute
+            int? charHp = snapshot.Builder.Stats.TryGetStat("Hit Points")
+                ?.ComputeValue(snapshot.Builder.Stats);
+
             result.Add(CompanionData.FromAssociate(
                 associate,
                 powerCard,
                 snapshot.Builder.Overlay,
                 customName: name,
-                customAppearance: appearance));
+                customAppearance: appearance,
+                characterHp: charHp));
         }
 
         // OCB iterates ALL active type="Companion" CharElements when emitting

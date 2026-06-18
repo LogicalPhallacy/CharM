@@ -424,7 +424,8 @@ public sealed record CompanionData(
         RulesElement? powerCard,
         ModifyOverlay? overlay,
         string? customName,
-        string? customAppearance)
+        string? customAppearance,
+        int? characterHp = null)
     {
         // Prefer the Power card's structured "Defenses" / "Hit Points"
         // fields. Both can carry descriptive (rather than numeric) text
@@ -435,7 +436,7 @@ public sealed record CompanionData(
         var defenses = ParseDefenses(defensesField);
 
         string? rawHp = GetOverlaidField(powerCard, overlay, "Hit Points");
-        int? hp = ParseInt(rawHp);
+        int? hp = ResolveCompanionHp(rawHp, characterHp);
         string? hpText = hp is null ? NullIfBlank(rawHp) : null;
 
         var abilities = ParseAbilityScores(
@@ -562,6 +563,36 @@ public sealed record CompanionData(
 
     private static int? ParseInt(string? text)
         => int.TryParse(text?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : null;
+
+    /// <summary>
+    /// Resolve descriptive companion HP text like "Your bloodied value" or
+    /// "Your healing surge value" into an actual number when the character's
+    /// HP is known. Falls back to plain numeric parse when the text is
+    /// already a number.
+    /// </summary>
+    private static int? ResolveCompanionHp(string? rawHp, int? characterHp)
+    {
+        if (string.IsNullOrWhiteSpace(rawHp))
+            return null;
+
+        // Already numeric
+        var numeric = ParseInt(rawHp);
+        if (numeric is not null)
+            return numeric;
+
+        if (characterHp is null || characterHp <= 0)
+            return null;
+
+        // "Your bloodied value" = floor(HP / 2)
+        if (rawHp.Contains("bloodied value", StringComparison.OrdinalIgnoreCase))
+            return characterHp.Value / 2;
+
+        // "Your healing surge value" = floor(HP / 4)
+        if (rawHp.Contains("healing surge value", StringComparison.OrdinalIgnoreCase))
+            return characterHp.Value / 4;
+
+        return null;
+    }
 
     private static string? NullIfBlank(string? text)
         => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
@@ -717,6 +748,8 @@ public sealed record CompanionData(
             "Healing Surges", "Attack", "Damage", "Damage Type", "Class", "Level",
             "Power Type", "Companion Power", "Power", "Channel Divinity",
             "Summoned Companion", "Senses",
+            "Ability Scores", "Initiative", "Perception", "Summoned Creature",
+            "Speed", "Resistance",
         };
 
         // Action-typed field names commonly used by summoning powers and
@@ -741,11 +774,33 @@ public sealed record CompanionData(
             string firstLine = value.Split('\n')[0].TrimStart();
             bool isActionField = actionFieldNames.Contains(trimmedName);
             bool isParenAction = firstLine.StartsWith("(", StringComparison.Ordinal);
-            if (!isActionField && !isParenAction) continue;
+
+            // Associate-style companion stat blocks (Living Zephyr, Flame
+            // Zephyr, etc.) use field names with parenthetical action tags:
+            //   "Animal Attack (At-Will)" → Attack: Melee 1 ...
+            //   "Debris Cloud (Aura 2)"   → The aura is ...
+            // The parenthetical is in the field NAME, not the value. Detect
+            // names containing "(At-Will)", "(Aura N)", or "(encounter)"
+            // action/trait tags.
+            bool isNameTaggedAction = !isActionField && !isParenAction
+                && trimmedName.Contains('(') && trimmedName.Contains(')');
+
+            if (!isActionField && !isParenAction && !isNameTaggedAction) continue;
 
             string? action;
             string body;
-            if (isParenAction)
+            if (isNameTaggedAction)
+            {
+                // "Animal Attack (At-Will)" → name = "Animal Attack", action = "At-Will"
+                int parenOpen = trimmedName.IndexOf('(');
+                int parenClose = trimmedName.IndexOf(')', parenOpen);
+                action = parenClose > parenOpen + 1
+                    ? trimmedName[(parenOpen + 1)..parenClose].Trim()
+                    : null;
+                trimmedName = trimmedName[..parenOpen].Trim();
+                body = value.Trim();
+            }
+            else if (isParenAction)
             {
                 int closeIdx = firstLine.IndexOf(')');
                 action = closeIdx > 0 ? firstLine[1..closeIdx].Trim() : null;
@@ -761,7 +816,7 @@ public sealed record CompanionData(
                 action = trimmedName;
                 body = value.Trim();
             }
-            extras.Add(new CompanionExtraPower(isParenAction ? trimmedName : trimmedName, action, body));
+            extras.Add(new CompanionExtraPower(trimmedName, action, body));
         }
 
         return extras;
