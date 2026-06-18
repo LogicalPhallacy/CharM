@@ -47,7 +47,10 @@ public sealed record CompanionData(
     string? AnchorPowerInternalId,
     bool IsFamiliar = false,
     bool IsPlaceholderForActiveBeast = false,
-    string? AttackAbility = null)
+    string? AttackAbility = null,
+    string? Perception = null,
+    string? Initiative = null,
+    string? CreatureType = null)
 {
     /// <summary>
     /// Build a <see cref="CompanionData"/> from a base Companion element + its
@@ -425,7 +428,8 @@ public sealed record CompanionData(
         ModifyOverlay? overlay,
         string? customName,
         string? customAppearance,
-        int? characterHp = null)
+        int? characterHp = null,
+        int characterLevel = 1)
     {
         // Prefer the Power card's structured "Defenses" / "Hit Points"
         // fields. Both can carry descriptive (rather than numeric) text
@@ -434,6 +438,19 @@ public sealed record CompanionData(
         // raw text via DefensesText / HitPointsText.
         string? defensesField = GetOverlaidField(powerCard, overlay, "Defenses");
         var defenses = ParseDefenses(defensesField);
+
+        // "Add your level to each defense" — the base values in the DB
+        // are level-independent, character level is added at display time.
+        if (!defenses.IsEmpty
+            && defensesField is not null
+            && defensesField.Contains("your level", StringComparison.OrdinalIgnoreCase))
+        {
+            defenses = new ParsedDefenses(
+                defenses.Ac + characterLevel,
+                defenses.Fortitude + characterLevel,
+                defenses.Reflex + characterLevel,
+                defenses.Will + characterLevel);
+        }
 
         string? rawHp = GetOverlaidField(powerCard, overlay, "Hit Points");
         int? hp = ResolveCompanionHp(rawHp, characterHp);
@@ -444,12 +461,20 @@ public sealed record CompanionData(
             ?? associate.Fields.GetValueOrDefault("Description"));
 
         string? speed = NullIfBlank(GetOverlaidField(powerCard, overlay, "Speed"));
-        string? size = ExtractCreatureSize(
-            GetOverlaidField(powerCard, overlay, "Summoned Creature")
+        string? summonedCreature = GetOverlaidField(powerCard, overlay, "Summoned Creature");
+        string? size = ExtractCreatureSize(summonedCreature
             ?? GetOverlaidField(powerCard, overlay, "Size"));
-        string? vision = NullIfBlank(
-            GetOverlaidField(powerCard, overlay, "Perception")
-            ?? GetOverlaidField(powerCard, overlay, "Senses"));
+        string? creatureType = NullIfBlank(summonedCreature);
+        string? perception = NullIfBlank(GetOverlaidField(powerCard, overlay, "Perception"));
+        string? initiative = NullIfBlank(GetOverlaidField(powerCard, overlay, "Initiative"));
+
+        // Resolve template expressions in perception/initiative
+        if (perception is not null)
+            perception = ResolveCompanionText(perception, characterLevel, abilities);
+        if (initiative is not null)
+            initiative = ResolveCompanionText(initiative, characterLevel, abilities);
+        string? vision = NullIfBlank(GetOverlaidField(powerCard, overlay, "Senses")
+            ?? GetOverlaidField(powerCard, overlay, "Vision"));
 
         // Pick the first attack-style field as the headline attack line.
         // Associate stat blocks use names like "Animal Attack (At-Will)",
@@ -457,9 +482,20 @@ public sealed record CompanionData(
         // picks them all up but we want the first one inline on the
         // mini-sheet too.
         string? attackText = null;
-        var extraPowers = powerCard is not null
+        var rawExtras = powerCard is not null
             ? ParseExtraPowers(powerCard)
             : Array.Empty<CompanionExtraPower>();
+
+        // Resolve template expressions ("your level + 5", "your Wisdom
+        // modifier") in the extra power descriptions against the
+        // character's actual stats.
+        var extraPowers = rawExtras.Count > 0
+            ? rawExtras.Select(e => e with
+              {
+                  Description = ResolveCompanionText(e.Description, characterLevel, abilities),
+              }).ToList()
+            : (IReadOnlyList<CompanionExtraPower>)rawExtras;
+
         if (extraPowers.Count > 0)
         {
             attackText = extraPowers[0].Name;
@@ -498,7 +534,10 @@ public sealed record CompanionData(
             ExtraPowers: extraPowers,
             IsMinion: false,
             IsSummon: false,
-            AnchorPowerInternalId: powerCard?.InternalId);
+            AnchorPowerInternalId: powerCard?.InternalId,
+            Perception: perception,
+            Initiative: initiative,
+            CreatureType: creatureType);
     }
 
     private static Dictionary<string, int> ParseAbilityScores(string? source)
@@ -519,11 +558,17 @@ public sealed record CompanionData(
     private static string? ExtractCreatureSize(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
+        // "Medium elemental magical beast" → "Medium"
+        // "Small elemental magical beast (air, fire)" → "Small"
         var sizes = new[] { "Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan" };
         foreach (var size in sizes)
         {
-            if (text.Contains(size, StringComparison.OrdinalIgnoreCase))
-                return text.Trim();
+            if (text.StartsWith(size, StringComparison.OrdinalIgnoreCase))
+                return size;
+            // Also handle "X creature" patterns with size embedded mid-string
+            int idx = text.IndexOf(size, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+                return size;
         }
         return null;
     }
@@ -610,7 +655,7 @@ public sealed record CompanionData(
     {
         if (string.IsNullOrWhiteSpace(text)) return ParsedDefenses.Empty;
         int? ac = null, fort = null, refl = null, will = null;
-        foreach (var part in text.Split([';', ','], StringSplitOptions.RemoveEmptyEntries))
+        foreach (var part in text.Split([';', ',', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
             var trimmed = part.Trim();
             int spaceIdx = trimmed.LastIndexOf(' ');
@@ -839,6 +884,61 @@ public sealed record CompanionData(
 
     /// <summary>Compute the ability modifier (4e: floor((score - 10) / 2)).</summary>
     public int Mod(int score) => (score - 10) / 2;
+
+    // Patterns for resolving companion template text
+    private static readonly Regex YourLevelPlusN = new(
+        @"your level \+ (\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex YourAbilityModifier = new(
+        @"your (Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) modifier",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex YourHighestAbilityModifier = new(
+        @"your highest ability modifier",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Resolve template expressions in companion text against the
+    /// character's stats. Handles:
+    /// <list type="bullet">
+    ///   <item><c>your level + N</c> → <c>level + N</c></item>
+    ///   <item><c>your Wisdom modifier</c> → <c>+6</c> (computed mod)</item>
+    ///   <item><c>your highest ability modifier</c> → max mod value</item>
+    /// </list>
+    /// </summary>
+    internal static string ResolveCompanionText(
+        string text,
+        int characterLevel,
+        Dictionary<string, int> abilities)
+    {
+        var result = YourLevelPlusN.Replace(text, m =>
+        {
+            int bonus = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            return $"{characterLevel + bonus}";
+        });
+
+        result = YourAbilityModifier.Replace(result, m =>
+        {
+            string abilityName = m.Groups[1].Value;
+            int score = abilities.GetValueOrDefault(abilityName, 10);
+            int mod = (score - 10) / 2;
+            return FormatModifier(mod);
+        });
+
+        result = YourHighestAbilityModifier.Replace(result, _ =>
+        {
+            int maxMod = abilities.Count > 0
+                ? abilities.Values.Max(s => (s - 10) / 2)
+                : 0;
+            return FormatModifier(maxMod);
+        });
+
+        return result;
+    }
+
+    private static string FormatModifier(int mod)
+        => mod >= 0 ? $"{mod}" : $"{mod}";
 
     private sealed record ParsedDefenses(int? Ac, int? Fortitude, int? Reflex, int? Will)
     {

@@ -86,13 +86,25 @@
 
             <!-- Descriptors row -->
             <dl class="text-[10px] leading-tight space-y-0.5 text-on-surface">
-                @if (!string.IsNullOrWhiteSpace(Companion.Size))
+                @if (!string.IsNullOrWhiteSpace(Companion.CreatureType))
+                {
+                    <div class="flex gap-1"><dt class="font-bold w-14 shrink-0">Type:</dt><dd>@Companion.CreatureType</dd></div>
+                }
+                else if (!string.IsNullOrWhiteSpace(Companion.Size))
                 {
                     <div class="flex gap-1"><dt class="font-bold w-14 shrink-0">Size:</dt><dd>@Companion.Size</dd></div>
                 }
                 @if (!string.IsNullOrWhiteSpace(Companion.Vision))
                 {
                     <div class="flex gap-1"><dt class="font-bold w-14 shrink-0">Vision:</dt><dd>@Companion.Vision</dd></div>
+                }
+                @if (!string.IsNullOrWhiteSpace(Companion.Perception))
+                {
+                    <div class="flex gap-1"><dt class="font-bold w-14 shrink-0">Perception:</dt><dd>@Companion.Perception</dd></div>
+                }
+                @if (!string.IsNullOrWhiteSpace(Companion.Initiative))
+                {
+                    <div class="flex gap-1"><dt class="font-bold w-14 shrink-0">Initiative:</dt><dd>@Companion.Initiative</dd></div>
                 }
                 @if (!string.IsNullOrWhiteSpace(Companion.Speed))
                 {

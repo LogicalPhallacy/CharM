@@ -243,7 +243,8 @@ public sealed partial class CharacterSession
                 snapshot.Builder.Overlay,
                 customName: name,
                 customAppearance: appearance,
-                characterHp: charHp));
+                characterHp: charHp,
+                characterLevel: Level));
         }
 
         // OCB iterates ALL active type="Companion" CharElements when emitting
