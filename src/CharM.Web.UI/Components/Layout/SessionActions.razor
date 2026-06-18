@@ -4,6 +4,7 @@
 @inject CharacterSessionService SessionService
 @inject RulesDatabaseService RulesDatabase
 @inject BrowserStorageService Storage
+@inject CharacterRestoreState RestoreState
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
 @implements IDisposable
@@ -215,6 +216,10 @@
     {
         try
         {
+            // Surface the loading overlay while the import runs.
+            RestoreState.Set(RestorePhase.Restoring);
+            await Task.Yield();
+
             // Clear the persistence slot before the new state lands.
             // Otherwise the import's Changed cascade races with the
             // restore path in CharacterPersistence on next reload.
@@ -232,6 +237,10 @@
             _statusIsError = true;
             _statusMessage = $"Import failed: {ex.Message}";
             await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            RestoreState.Set(RestorePhase.Idle);
         }
     }
 

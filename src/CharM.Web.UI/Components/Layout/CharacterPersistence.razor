@@ -80,7 +80,13 @@
             }
 
             // We have bytes to import — surface the loading modal.
+            // Yield explicitly so Blazor renders the RestoreOverlay before
+            // the synchronous base64-decode + import burns CPU. Without this,
+            // the entire Restoring→Idle transition can complete in one render
+            // frame and the user never sees the spinner (especially in MAUI's
+            // BlazorWebView where there's no SignalR hop to force a yield).
             RestoreState.Set(RestorePhase.Restoring);
+            await Task.Yield();
 
             try
             {
