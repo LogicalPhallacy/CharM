@@ -233,9 +233,25 @@ public sealed partial class CharacterSession
                 string.Equals(e.Type, "Power", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(e.Name, associate.Name, StringComparison.OrdinalIgnoreCase));
 
-            // Resolve character HP so "Your bloodied value" can compute
+            // Resolve character stats for template substitution
             int? charHp = snapshot.Builder.Stats.TryGetStat("Hit Points")
                 ?.ComputeValue(snapshot.Builder.Stats);
+            int? charInit = snapshot.Builder.Stats.TryGetStat("Initiative")
+                ?.ComputeValue(snapshot.Builder.Stats);
+            int? charPerception = snapshot.Builder.Stats.TryGetStat("Perception")
+                ?.ComputeValue(snapshot.Builder.Stats);
+
+            // CHARACTER's ability scores for "your X modifier" resolution
+            var charAbilities = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (_abilityScores is not null)
+            {
+                charAbilities["Strength"] = _abilityScores[Ability.Strength];
+                charAbilities["Constitution"] = _abilityScores[Ability.Constitution];
+                charAbilities["Dexterity"] = _abilityScores[Ability.Dexterity];
+                charAbilities["Intelligence"] = _abilityScores[Ability.Intelligence];
+                charAbilities["Wisdom"] = _abilityScores[Ability.Wisdom];
+                charAbilities["Charisma"] = _abilityScores[Ability.Charisma];
+            }
 
             result.Add(CompanionData.FromAssociate(
                 associate,
@@ -244,7 +260,10 @@ public sealed partial class CharacterSession
                 customName: name,
                 customAppearance: appearance,
                 characterHp: charHp,
-                characterLevel: Level));
+                characterLevel: Level,
+                characterAbilities: charAbilities,
+                characterInitiative: charInit,
+                characterPerception: charPerception));
         }
 
         // OCB iterates ALL active type="Companion" CharElements when emitting

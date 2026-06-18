@@ -429,7 +429,10 @@ public sealed record CompanionData(
         string? customName,
         string? customAppearance,
         int? characterHp = null,
-        int characterLevel = 1)
+        int characterLevel = 1,
+        Dictionary<string, int>? characterAbilities = null,
+        int? characterInitiative = null,
+        int? characterPerception = null)
     {
         // Prefer the Power card's structured "Defenses" / "Hit Points"
         // fields. Both can carry descriptive (rather than numeric) text
@@ -468,13 +471,18 @@ public sealed record CompanionData(
         string? perception = NullIfBlank(GetOverlaidField(powerCard, overlay, "Perception"));
         string? initiative = NullIfBlank(GetOverlaidField(powerCard, overlay, "Initiative"));
 
-        // Resolve template expressions in perception/initiative
-        if (perception is not null)
-            perception = ResolveCompanionText(perception, characterLevel, abilities);
-        if (initiative is not null)
-            initiative = ResolveCompanionText(initiative, characterLevel, abilities);
+        // Resolve "Equal to yours" / "Equal to yours + N" against
+        // the character's actual Initiative and Perception stats.
+        perception = ResolveEqualToYours(perception, characterPerception);
+        initiative = ResolveEqualToYours(initiative, characterInitiative);
+
         string? vision = NullIfBlank(GetOverlaidField(powerCard, overlay, "Senses")
             ?? GetOverlaidField(powerCard, overlay, "Vision"));
+
+        // The abilities dict passed to ResolveCompanionText must be the
+        // CHARACTER's scores — "your Wisdom modifier" in companion text
+        // means the player character's Wisdom, not the companion's.
+        var charAbilities = characterAbilities ?? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         // Pick the first attack-style field as the headline attack line.
         // Associate stat blocks use names like "Animal Attack (At-Will)",
@@ -488,11 +496,11 @@ public sealed record CompanionData(
 
         // Resolve template expressions ("your level + 5", "your Wisdom
         // modifier") in the extra power descriptions against the
-        // character's actual stats.
+        // CHARACTER's actual stats.
         var extraPowers = rawExtras.Count > 0
             ? rawExtras.Select(e => e with
               {
-                  Description = ResolveCompanionText(e.Description, characterLevel, abilities),
+                  Description = ResolveCompanionText(e.Description, characterLevel, charAbilities),
               }).ToList()
             : (IReadOnlyList<CompanionExtraPower>)rawExtras;
 
@@ -887,7 +895,11 @@ public sealed record CompanionData(
 
     // Patterns for resolving companion template text
     private static readonly Regex YourLevelPlusN = new(
-        @"your level \+ (\d+)",
+        @"your level\s*\+\s*(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex YourLevelBare = new(
+        @"\byour level\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex YourAbilityModifier = new(
@@ -898,43 +910,93 @@ public sealed record CompanionData(
         @"your highest ability modifier",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex OneHalfYourLevel = new(
+        @"one-half your level",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex EqualToYoursPlusN = new(
+        @"[Ee]qual to yours\s*\+\s*(\d+)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex EqualToYours = new(
+        @"[Ee]qual to yours",
+        RegexOptions.Compiled);
+
     /// <summary>
     /// Resolve template expressions in companion text against the
-    /// character's stats. Handles:
+    /// CHARACTER's stats. Handles:
     /// <list type="bullet">
     ///   <item><c>your level + N</c> → <c>level + N</c></item>
-    ///   <item><c>your Wisdom modifier</c> → <c>+6</c> (computed mod)</item>
-    ///   <item><c>your highest ability modifier</c> → max mod value</item>
+    ///   <item><c>your level</c> (bare) → level value</item>
+    ///   <item><c>your Wisdom modifier</c> → computed character mod</item>
+    ///   <item><c>your highest ability modifier</c> → max character mod</item>
+    ///   <item><c>one-half your level</c> → <c>floor(level/2)</c></item>
+    ///   <item><c>Equal to yours + N</c> → placeholder (caller resolves)</item>
+    ///   <item><c>Equal to yours</c> → placeholder (caller resolves)</item>
     /// </list>
+    /// <para><paramref name="characterAbilities"/> are the CHARACTER's ability
+    /// scores, not the companion's. "Your Wisdom modifier" means the character's
+    /// Wisdom mod applied to the companion's attack/damage.</para>
     /// </summary>
     internal static string ResolveCompanionText(
         string text,
         int characterLevel,
-        Dictionary<string, int> abilities)
+        Dictionary<string, int> characterAbilities)
     {
+        // "your level + N" → computed
         var result = YourLevelPlusN.Replace(text, m =>
         {
             int bonus = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
             return $"{characterLevel + bonus}";
         });
 
+        // "one-half your level" → floor(level / 2)
+        result = OneHalfYourLevel.Replace(result, _ => $"{characterLevel / 2}");
+
+        // "your level" (bare, after + N already replaced) → level
+        result = YourLevelBare.Replace(result, $"{characterLevel}");
+
+        // "your Wisdom modifier" etc. → character's mod
         result = YourAbilityModifier.Replace(result, m =>
         {
             string abilityName = m.Groups[1].Value;
-            int score = abilities.GetValueOrDefault(abilityName, 10);
+            int score = characterAbilities.GetValueOrDefault(abilityName, 10);
             int mod = (score - 10) / 2;
             return FormatModifier(mod);
         });
 
+        // "your highest ability modifier" → max of character's mods
         result = YourHighestAbilityModifier.Replace(result, _ =>
         {
-            int maxMod = abilities.Count > 0
-                ? abilities.Values.Max(s => (s - 10) / 2)
+            int maxMod = characterAbilities.Count > 0
+                ? characterAbilities.Values.Max(s => (s - 10) / 2)
                 : 0;
             return FormatModifier(maxMod);
         });
 
         return result;
+    }
+
+    /// <summary>
+    /// Resolve "Equal to yours" / "Equal to yours + N" patterns against a
+    /// specific character stat value (e.g. Initiative, Perception).
+    /// </summary>
+    internal static string? ResolveEqualToYours(string? text, int? characterStatValue)
+    {
+        if (string.IsNullOrWhiteSpace(text) || characterStatValue is null)
+            return text;
+
+        var plusMatch = EqualToYoursPlusN.Match(text);
+        if (plusMatch.Success)
+        {
+            int bonus = int.Parse(plusMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+            return $"{characterStatValue.Value + bonus}";
+        }
+
+        if (EqualToYours.IsMatch(text))
+            return $"{characterStatValue.Value}";
+
+        return text;
     }
 
     private static string FormatModifier(int mod)
