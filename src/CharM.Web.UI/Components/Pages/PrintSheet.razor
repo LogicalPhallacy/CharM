@@ -820,6 +820,7 @@ else
                     <div style="font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink-soft);margin-bottom:3px;">
                         @(SeparateSkillsBlock ? "Abilities" : "Abilities & Skills")
                     </div>
+                    <div style="@(SeparateSkillsBlock ? "display:grid;grid-template-columns:1fr 1fr;gap:3px;" : "")">
                     @foreach (var (abilityName, _) in _abilities)
                     {
                         int score = snapshot?.GetStat(abilityName) ?? 10;
@@ -856,6 +857,7 @@ else
                             }
                         </div>
                     }
+                    </div>
 
                     @if (SeparateSkillsBlock)
                     {
