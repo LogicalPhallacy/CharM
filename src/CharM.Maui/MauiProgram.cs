@@ -38,6 +38,7 @@ public static class MauiProgram
         builder.Services.AddScoped<DiceRollerUiService>();
         builder.Services.AddScoped<CharacterResourceTracker>();
         builder.Services.AddScoped<CalculationBreakdownService>();
+        builder.Services.AddScoped<DisplaySettingsService>();
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();

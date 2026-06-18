@@ -33,6 +33,7 @@ builder.Services.AddScoped<DiceRoller>();
 builder.Services.AddScoped<DiceRollerUiService>();
 builder.Services.AddScoped<CharacterResourceTracker>();
 builder.Services.AddScoped<CalculationBreakdownService>();
+builder.Services.AddScoped<DisplaySettingsService>();
 
 var app = builder.Build();
 

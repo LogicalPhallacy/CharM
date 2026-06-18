@@ -1,0 +1,100 @@
+@using Microsoft.AspNetCore.Components.Web
+@inject DisplaySettingsService Settings
+
+@if (Show)
+{
+    <div class="fixed inset-0 z-[100] bg-black/40 flex items-center justify-center p-4 no-print" @onclick="HandleBackdropClick">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full overflow-hidden" @onclick:stopPropagation="true">
+            <div class="px-5 py-3 border-b border-outline-variant/20 flex items-center justify-between">
+                <h2 class="font-headline text-lg font-bold text-on-surface">Display Settings</h2>
+                <button type="button" @onclick="Cancel"
+                        class="p-1 rounded hover:bg-surface-container-low text-outline">
+                    <span class="material-symbols-outlined text-lg">close</span>
+                </button>
+            </div>
+
+            <div class="px-5 py-4 space-y-5">
+                <fieldset class="space-y-2">
+                    <legend class="font-label text-[11px] uppercase tracking-widest text-outline mb-1">Layout</legend>
+                    <label class="flex items-center gap-3 cursor-pointer">
+                        <input type="checkbox" @bind="_hideDiceButtons"
+                               class="w-4 h-4 rounded text-primary focus:ring-primary" />
+                        <div>
+                            <span class="text-sm">Hide dice roll buttons</span>
+                            <span class="block text-[11px] text-on-surface-variant">
+                                Removes the <span class="material-symbols-outlined text-[11px] align-text-bottom">casino</span>
+                                icons next to attack and damage values
+                            </span>
+                        </div>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer">
+                        <input type="checkbox" @bind="_separateSkillsBlock"
+                               class="w-4 h-4 rounded text-primary focus:ring-primary" />
+                        <div>
+                            <span class="text-sm">Separate skills block</span>
+                            <span class="block text-[11px] text-on-surface-variant">
+                                Moves skills into their own alphabetical list below abilities
+                            </span>
+                        </div>
+                    </label>
+                </fieldset>
+
+                <fieldset>
+                    <legend class="font-label text-[11px] uppercase tracking-widest text-outline mb-2">Custom CSS</legend>
+                    <textarea @bind="_customCss"
+                              rows="6"
+                              class="w-full px-3 py-2 text-xs font-mono bg-surface-container-low border border-outline-variant/30 rounded text-on-surface focus:border-primary focus:outline-none resize-y"
+                              placeholder="/* Your custom CSS here */&#10;.ghost-border { border-color: red; }"></textarea>
+                    <p class="text-[10px] text-on-surface-variant mt-1">
+                        Applied globally to all pages. Use browser DevTools to inspect class names.
+                    </p>
+                </fieldset>
+            </div>
+
+            <div class="px-5 py-3 bg-surface-container-low border-t border-outline-variant/20 flex justify-end gap-2">
+                <button type="button" @onclick="Cancel"
+                        class="px-4 py-1.5 text-sm font-label uppercase tracking-wider hover:bg-surface-container">
+                    Cancel
+                </button>
+                <button type="button" @onclick="Save"
+                        class="px-4 py-1.5 text-sm font-label uppercase tracking-wider bg-primary text-on-primary hover:bg-primary/90 rounded-sm flex items-center gap-2">
+                    <span class="material-symbols-outlined text-sm">save</span>
+                    Save
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Show { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private bool _hideDiceButtons;
+    private bool _separateSkillsBlock;
+    private string _customCss = "";
+
+    private bool _lastShow;
+
+    protected override void OnParametersSet()
+    {
+        // Sync local state from service when the modal opens.
+        if (Show && !_lastShow)
+        {
+            _hideDiceButtons = Settings.HideDiceButtons;
+            _separateSkillsBlock = Settings.SeparateSkillsBlock;
+            _customCss = Settings.CustomCss ?? "";
+        }
+        _lastShow = Show;
+    }
+
+    private async Task Save()
+    {
+        Settings.Update(_hideDiceButtons, _separateSkillsBlock, _customCss);
+        await OnClose.InvokeAsync();
+    }
+
+    private Task Cancel() => OnClose.InvokeAsync();
+
+    private Task HandleBackdropClick() => OnClose.InvokeAsync();
+}

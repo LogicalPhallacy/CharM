@@ -1,4 +1,12 @@
 ﻿@inherits LayoutComponentBase
+@inject DisplaySettingsService DisplaySettings
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (!string.IsNullOrEmpty(DisplaySettings.CustomCss))
+{
+    <style id="charm-custom-css">@((MarkupString)DisplaySettings.CustomCss)</style>
+}
 
 <!-- Top Navigation Bar -->
 <nav class="sticky top-0 z-50 bg-surface-container-lowest border-b border-outline-variant/20 no-print">
@@ -38,6 +46,9 @@
     </div>
 </nav>
 
+<CascadingValue Name="HideDiceButtons" Value="DisplaySettings.HideDiceButtons">
+<CascadingValue Name="SeparateSkillsBlock" Value="DisplaySettings.SeparateSkillsBlock">
+
 <!-- Main Content -->
 <main class="max-w-screen-2xl mx-auto px-4 md:px-8 py-6">
     <CharacterPersistence />
@@ -67,3 +78,25 @@
         </NavLink>
     </div>
 </nav>
+
+</CascadingValue>
+</CascadingValue>
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            DisplaySettings.Changed += HandleSettingsChanged;
+            await DisplaySettings.LoadAsync(JS);
+        }
+    }
+
+    private void HandleSettingsChanged()
+        => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        DisplaySettings.Changed -= HandleSettingsChanged;
+    }
+}

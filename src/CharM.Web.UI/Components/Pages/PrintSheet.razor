@@ -399,10 +399,11 @@
         font-size: 8.5pt;
         line-height: 1.25;
         padding: 1px 0;
-        /* One-line clamp: don't let entries wrap past one line. */
-        white-space: nowrap;
+        /* Two-line clamp: allow wrapping to a second line, then truncate. */
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
         overflow: hidden;
-        text-overflow: ellipsis;
     }
     .build-entry .name { font-weight: 700; }
     .build-entry .desc {
@@ -746,6 +747,7 @@ else
     var collection = Collector.Collect();
     var cards = collection.AllNonCompanion;
 
+    <CascadingValue Name="HideDiceButtons" Value="true">
     <div class="print-sheet theme-@_options.Color size-@_options.Size @(_options.CutMarks ? "cuts-on" : "cuts-off")">
 
         <div class="print-toolbar no-print">
@@ -816,7 +818,7 @@ else
                 @* ----- LEFT COLUMN: Abilities + skills, then Equipment fills rest ----- *@
                 <div class="left-col">
                     <div style="font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink-soft);margin-bottom:3px;">
-                        Abilities &amp; Skills
+                        @(SeparateSkillsBlock ? "Abilities" : "Abilities & Skills")
                     </div>
                     @foreach (var (abilityName, _) in _abilities)
                     {
@@ -830,25 +832,49 @@ else
                                 <div class="ability-name">@abilityName[..3].ToUpper()</div>
                                 <div class="score">@score</div>
                             </div>
-                            <div class="as-skills">
-                                @if (linked.Length == 0)
-                                {
-                                    <div class="as-skill no-skills">—</div>
-                                }
-                                else
-                                {
-                                    @foreach (var skill in linked)
+                            @if (!SeparateSkillsBlock)
+                            {
+                                <div class="as-skills">
+                                    @if (linked.Length == 0)
                                     {
-                                        int skillVal = snapshot?.GetStat(skill) ?? mod;
-                                        bool trained = IsTrained(snapshot, skill);
-                                        <div class="as-skill @(trained ? "trained" : "")">
-                                            <span class="skill-mark">@(trained ? "●" : "")</span>
-                                            <span class="skill-name">@skill</span>
-                                            <span class="skill-mod">@FormatMod(skillVal)</span>
-                                        </div>
+                                        <div class="as-skill no-skills">—</div>
                                     }
-                                }
-                            </div>
+                                    else
+                                    {
+                                        @foreach (var skill in linked)
+                                        {
+                                            int skillVal = snapshot?.GetStat(skill) ?? mod;
+                                            bool trained = IsTrained(snapshot, skill);
+                                            <div class="as-skill @(trained ? "trained" : "")">
+                                                <span class="skill-mark">@(trained ? "●" : "")</span>
+                                                <span class="skill-name">@skill</span>
+                                                <span class="skill-mod">@FormatMod(skillVal)</span>
+                                            </div>
+                                        }
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (SeparateSkillsBlock)
+                    {
+                        <div style="font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink-soft);margin:6px 0 3px;">
+                            Skills
+                        </div>
+                        <div>
+                            @foreach (var skill in _allSkillsAlphabetical)
+                            {
+                                int skillVal = snapshot?.GetStat(skill) ?? 0;
+                                bool trained = IsTrained(snapshot, skill);
+                                <div class="as-skill @(trained ? "trained" : "")" style="display:flex;justify-content:space-between;align-items:baseline;padding:1px 3px;">
+                                    <span>
+                                        <span class="skill-mark" style="display:inline-block;width:8px;">@(trained ? "●" : "")</span>
+                                        <span class="skill-name">@skill</span>
+                                    </span>
+                                    <span class="skill-mod" style="min-width:24px;text-align:right;">@FormatMod(skillVal)</span>
+                                </div>
+                            }
                         </div>
                     }
 
@@ -1383,11 +1409,14 @@ else
             </section>
         }
     </div>
+    </CascadingValue>
 }
 
 @code {
     private PrintOptions _options = new("color", "letter", false, true, true);
     private bool _bodyClassApplied;
+
+    [CascadingParameter(Name = "SeparateSkillsBlock")] public bool SeparateSkillsBlock { get; set; }
 
     private static readonly (string Name, Ability Ability)[] _abilities =
     [
@@ -1410,6 +1439,14 @@ else
         ["Wisdom"] = ["Dungeoneering", "Heal", "Insight", "Nature", "Perception"],
         ["Charisma"] = ["Bluff", "Diplomacy", "Intimidate", "Streetwise"],
     };
+
+    private static readonly string[] _allSkillsAlphabetical =
+    [
+        "Acrobatics", "Arcana", "Athletics", "Bluff", "Diplomacy",
+        "Dungeoneering", "Endurance", "Heal", "History", "Insight",
+        "Intimidate", "Nature", "Perception", "Religion", "Stealth",
+        "Streetwise", "Thievery",
+    ];
 
     protected override void OnInitialized()
     {

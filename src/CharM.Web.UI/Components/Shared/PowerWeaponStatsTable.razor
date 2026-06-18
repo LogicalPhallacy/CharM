@@ -10,7 +10,7 @@
                 <div class="grid grid-cols-3 gap-2 text-[10px] leading-tight">
                     <span class="font-bold truncate">@weapon.Name</span>
                     <span>
-                        @if (weapon.AttackRollExpression is not null)
+                        @if (!HideDiceButtons && weapon.AttackRollExpression is not null)
                         {
                             @PowerWeaponCalculationValue($"{Card.Name} {weapon.Name} attack", weapon.Attack ?? "-", weapon.AttackComponents)
                             <button type="button"
@@ -30,7 +30,7 @@
                             var expression = weapon.DamageRollExpression ?? weapon.HealingRollExpression;
                             var display = weapon.Damage ?? weapon.Healing ?? "-";
                         }
-                        @if (expression is not null)
+                        @if (!HideDiceButtons && expression is not null)
                         {
                             @PowerWeaponCalculationValue($"{Card.Name} {weapon.Name}", display, weapon.Damage is not null ? weapon.DamageComponents : weapon.HealingComponents)
                             <button type="button"
@@ -54,6 +54,8 @@
 @code {
     [Parameter, EditorRequired]
     public PowerDisplayCard Card { get; set; } = default!;
+
+    [CascadingParameter(Name = "HideDiceButtons")] public bool HideDiceButtons { get; set; }
 
     private void OpenAttackRoll(string expression)
         => DiceRoller.Open(expression, $"{Card.Name} attack");

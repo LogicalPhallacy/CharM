@@ -167,7 +167,7 @@ else
             {
                 <div class="space-y-2">
                     <div class="flex items-center justify-between mb-1">
-                        <h2 class="font-label text-[10px] font-bold uppercase tracking-[0.2em] text-outline">Abilities &amp; Skills</h2>
+                        <h2 class="font-label text-[10px] font-bold uppercase tracking-[0.2em] text-outline">@(SeparateSkillsBlock ? "Abilities" : "Abilities & Skills")</h2>
                         <button @onclick="() => _editingAbilityScores = true"
                                 class="text-[10px] text-on-surface-variant hover:text-primary flex items-center gap-1"
                                 title="Edit ability scores">
@@ -184,6 +184,7 @@ else
                             </button>
                         </div>
                     }
+                    <div class="@(SeparateSkillsBlock ? "grid grid-cols-2 gap-2" : "space-y-2")">
                     @foreach (var (abilityName, abilityKey) in _abilityDefs)
                     {
                         int score = snapshot?.GetStat(abilityName) ?? session.AbilityScores![abilityKey];
@@ -208,26 +209,56 @@ else
                                     </div>
                                 </div>
                             </div>
-                            <div class="flex-grow space-y-0.5">
-                                @foreach (var skill in linkedSkills)
-                                {
-                                    int skillVal = snapshot?.GetStat(skill) ?? mod;
-                                    bool trained = snapshot is not null && snapshot.GetStat(skill + " Trained") > 0;
-                                    string skillStr = skillVal >= 0 ? $"+{skillVal}" : $"{skillVal}";
+                            @if (!SeparateSkillsBlock)
+                            {
+                                <div class="flex-grow space-y-0.5">
+                                    @foreach (var skill in linkedSkills)
+                                    {
+                                        int skillVal = snapshot?.GetStat(skill) ?? mod;
+                                        bool trained = snapshot is not null && snapshot.GetStat(skill + " Trained") > 0;
+                                        string skillStr = skillVal >= 0 ? $"+{skillVal}" : $"{skillVal}";
 
-                                    <div class="flex justify-between items-center text-[10px] px-1.5 @(trained ? "py-0.5 bg-surface-container-low font-bold" : "text-outline")">
-                                        <span>@skill</span>
-                                        <span>
-                                            <CalculationPopover Stats="snapshot?.Builder.Stats" StatName="@skill" TriggerClass="text-inherit">
-                                                @skillStr
-                                            </CalculationPopover>
-                                        </span>
-                                    </div>
-                                }
-                            </div>
+                                        <div class="flex justify-between items-center text-[10px] px-1.5 @(trained ? "py-0.5 bg-surface-container-low font-bold" : "text-outline")">
+                                            <span>@skill</span>
+                                            <span>
+                                                <CalculationPopover Stats="snapshot?.Builder.Stats" StatName="@skill" TriggerClass="text-inherit">
+                                                    @skillStr
+                                                </CalculationPopover>
+                                            </span>
+                                        </div>
+                                    }
+                                </div>
+                            }
                         </div>
                     }
+                    </div>
                 </div>
+
+                @if (SeparateSkillsBlock)
+                {
+                    <div class="bg-surface-container-lowest ghost-border overflow-hidden">
+                        <div class="px-3 py-1.5 border-b border-outline-variant/20">
+                            <h2 class="font-label text-[10px] font-bold uppercase tracking-[0.2em] text-outline">Skills</h2>
+                        </div>
+                        <div class="p-2 space-y-0.5">
+                            @foreach (var skill in _allSkillsAlphabetical)
+                            {
+                                int skillVal = snapshot?.GetStat(skill) ?? 0;
+                                bool trained = snapshot is not null && snapshot.GetStat(skill + " Trained") > 0;
+                                string skillStr = skillVal >= 0 ? $"+{skillVal}" : $"{skillVal}";
+
+                                <div class="flex justify-between items-center text-[10px] px-1.5 @(trained ? "py-0.5 bg-surface-container-low font-bold" : "text-outline")">
+                                    <span>@skill</span>
+                                    <span>
+                                        <CalculationPopover Stats="snapshot?.Builder.Stats" StatName="@skill" TriggerClass="text-inherit">
+                                            @skillStr
+                                        </CalculationPopover>
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
             }
 
             <!-- Money / Economics -->
@@ -1275,6 +1306,8 @@ else
     private bool _editingXp;
     private bool _editingAbilityScores;
 
+    [CascadingParameter(Name = "SeparateSkillsBlock")] public bool SeparateSkillsBlock { get; set; }
+
     // Gameplay resource tracking
     private int _actionPoints = 1;
 
@@ -1319,6 +1352,14 @@ else
         ["Wisdom"] = ["Dungeoneering", "Heal", "Insight", "Nature", "Perception"],
         ["Charisma"] = ["Bluff", "Diplomacy", "Intimidate", "Streetwise"],
     };
+
+    private static readonly string[] _allSkillsAlphabetical =
+    [
+        "Acrobatics", "Arcana", "Athletics", "Bluff", "Diplomacy",
+        "Dungeoneering", "Endurance", "Heal", "History", "Insight",
+        "Intimidate", "Nature", "Perception", "Religion", "Stealth",
+        "Streetwise", "Thievery",
+    ];
 
     protected override void OnInitialized()
     {

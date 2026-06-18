@@ -1,6 +1,6 @@
 @inject DiceRollerUiService DiceRoller
 
-@if (TryGetRollExpression(Line, out var expression))
+@if (!HideDiceButtons && TryGetRollExpression(Line, out var expression))
 {
     @PowerCalculationValue
     <button type="button"
@@ -19,6 +19,7 @@ else
     [Parameter, EditorRequired] public PowerStatLine Line { get; set; } = default!;
     [Parameter, EditorRequired] public string PowerName { get; set; } = "";
     [Parameter] public string CssClass { get; set; } = "";
+    [CascadingParameter(Name = "HideDiceButtons")] public bool HideDiceButtons { get; set; }
 
     private void OpenRoll(string expression)
         => DiceRoller.Open(expression, $"{PowerName} {Line.Label}");
