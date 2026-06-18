@@ -1148,6 +1148,7 @@ else
     /// </summary>
     private static bool IsCompanionPowerCard(PowerDisplayCard card)
         => card.InternalId.StartsWith("ID_TIV_COMPANION-", StringComparison.OrdinalIgnoreCase)
+        || card.InternalId.StartsWith("ID_TIV_COMPANION_", StringComparison.OrdinalIgnoreCase)
         || card.InternalId.StartsWith("ID_TIV_ANIMAL_COMPANION-", StringComparison.OrdinalIgnoreCase)
         || card.InternalId.StartsWith("ID_INTERNAL_POWER_BEAST_", StringComparison.OrdinalIgnoreCase)
         || card.Name.StartsWith("Companion:", StringComparison.OrdinalIgnoreCase)
