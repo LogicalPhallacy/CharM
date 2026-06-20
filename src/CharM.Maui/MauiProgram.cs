@@ -13,9 +13,6 @@ public static class MauiProgram
 #if WINDOWS
         ConfigureWebView2UserDataFolder();
 #endif
-#if MACCATALYST
-        FilePickerLog.Info("startup", $"MauiProgram.CreateMauiApp entered (pid={Environment.ProcessId})");
-#endif
 
         var builder = MauiApp.CreateBuilder();
         builder.UseMauiApp<App>();
