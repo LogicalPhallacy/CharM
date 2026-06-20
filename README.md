@@ -3,16 +3,16 @@ CharM is a TTRPG character creation program, compatible with rules defining the 
 
 ## Usage
 ### Windows
-Download the latest windows build from the releases page and extract all the files to a folder of your choosing. Run charm.maui.exe.
+Download the latest windows build from the releases page and extract the charm-maui folder. Run charm.maui.exe.
 ### Mac
-Not having a mac os machine makes this challenging. The app runs but file dialogs don't work and it locks up for seemingly no reason. Still debugging this.
+Run Charm. It is a little larger than it has to be because something in trimming breaks the database, but it should run. Testing is more limited annoyingly because of a lack of apple devices.
 ### Android
 Install the APK. The android version doesn't support building a rules db from the exe because of compression library compatibility issues, so bring a rules db.
 ### Linux
 Because Linux isn't an OS, its a kernel with a whole bunch of tools in a trenchcoat, getting a unified UI option that works for everyone is just not going to happen. So on Linux you get to bring your own browser. Use the Linux server release and run it (this may require chmod +x) as a daemon with --urls "http://localhost:8080" (or whatever port and bind you please, I'm not a cop). Then open that url in your browser of choice. Because C libraries are a pre-AI hallucination we all just have to live with you might have have to add or delete some packages from whatever distro you are using. If you figure out what those are and want to package this up so it works with whatever your package installer of choice is, go nuts. 
 
 ### Server Mode
-If you're an unhinged lunatic who for some reason wants to run this as a webserver on platforms where you don't have to, you can. Download the server release for your OS (Windows or Linux) and run it with the urls option defining what you want it to bind on. Please note that I am not responsible if something bad happens because you exposed a character maker server to the internet. Kestrel is a competent webserver, and I know what the code involved here is doing, but I can make no assurances that 0 days won't happen or libraries won't get outdated and leave you vulnerable. Getting your computer infected because you exposed your retro RPG character maker to the internet is considered embarrassing in most nerd circles.
+If you're an unhinged lunatic who for some reason wants to run this as a webserver on platforms where you don't have to, you can. Extract the server release for your OS (Windows or Linux) and run it with the urls option defining what you want it to bind on. Please note that I am not responsible if something bad happens because you exposed a character maker server to the internet. Kestrel is a competent webserver, and I know what the code involved here is doing, but I can make no assurances that 0 days won't happen or libraries won't get outdated and leave you vulnerable. Getting your computer infected because you exposed your retro RPG character maker to the internet is considered embarrassing in most nerd circles.
 
 ### Importing rules
 The first time you run CharM you'll be prompted to point it at your "rules.db" file. If you've run charm before, you should already have one that you've backed up. If you don't, that's ok, CharM can create one. You need an item from column A, and optionally an item from column B.
@@ -24,19 +24,28 @@ The first time you run CharM you'll be prompted to point it at your "rules.db" f
 
 If you don't know where you left those things, I am sure there are people on the internet willing to help you. Once you've created your rules.db file, make sure to back it up somewhere safe so you don't need to do this again in the future. Creating the rules db can take a while, especially if you're pulling an index from the internet.
 
+Charm is technically compatible with anything else using the same D20Engine rules XML standard (at least to a point), but I'm not aware of anything else yet. Someone should do it for Orcus, Amethyst, and/or 13th Age because that'd be really cool. Almost anything using SRD would be possible to some degree, though the capabilities might be a BIT wasted on more "old school" rpgs.
+
+### Creating and editing characters
+
+On a character with unselected choices (like a new character or a character you levelled up), there should be some boxes at the top of the page indicating which choices are available. You can click them to select from the available options given the choice and your characters current state. If you don't like a choice you made, you can find all of them in the detail tab and remove it, some can also be reselected by clicking the little edit pencil right by the choice. Optional choices can be dismissed with the little x after them. Some choices may be selectable multiple times (the choice box will have a number after it if it is). 
+
 ## Features
-- All 4th edition rulesxml elements covered (AFAICT) with close to perfect parity**
+- All 4th edition rulesxml elements covered (AFAICT) with close to perfect parity*
 - Modern UI for use as a digital character sheet
 - Special Print mode (including power cards)
+- Custom CSS (click the gear in the top right) for making the layout how you like
 - DND4E format importing and exporting
 - Text String/Forum Post import/export
 - Building a character from scratch
 - Levelling up a character you'd already built before
 - Basic "digital character sheet" features so you can use a tablet or laptop at the table.
 
+(*) There are some things we've deliberately deviated on because the outputs from other rules xml parsers were missing some conditions or didn't output things in as human friendly of a way as they could have. There are also some corrections we've made based on changes made after the last character builder version (starting funds post-level 1 for example)
+
 ### Things that aren't done:
 - Rules version stamping for characters (will be useful if you're trying to tell if you made a character with specific homebrew parts/versions)
-- The Mac version locks up and file dialogs are busted. This is challenging to debug as I don't have a Mac OS device.
+- Customizable parts file loads/updates/enables/disables
 - Better file format options than the DND4e one
 - Retargeted compendium links for use with live options
 - A decent icon
@@ -58,6 +67,3 @@ There's a great chance I've missed some weird rules interaction or wording quirk
 
 ## AI Usage disclaimer
 This project has a lot of AI written/assisted code. I am a developer by trade, I know what the code is doing well enough and I've rewritten/reworked enough portions of it that I'm not concerned, but obviously you have your own comfort level. This project specifically was a particularly good use case for an AI loop since we have very distinct inputs we can recalculate with our xml parser/rules interpreter that can then be judged for objective correctness against the original, so slop has to actually work to move forward. The tedious process of analyze large dataset, make small code change, reanalyze and score large dataset is one that computers are objectively meant to do. Also the AI makes prettier frontends than I do.
-
-(*) Its technically compatible with anything else using the same D20Engine rules XML standard (at least to a point), but I'm not aware of anything else yet. Someone should do it for Orcus and/or 13th Age because that'd be really cool. Almost anything using SRD would be possible to some degree, though the capabilities might be a BIT wasted on more "old school" rpgs.
-(**) There are some things we've deliberately deviated on because the outputs from other rules xml parsers were missing some conditions or didn't output things in as human friendly of a way as they could have. There are also some corrections we've made based on changes made after the last character version (starting funds post-level 1 for example)

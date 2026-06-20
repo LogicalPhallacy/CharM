@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Foundation;
+using ObjCRuntime;
 using UIKit;
 using WebKit;
 
@@ -18,8 +19,36 @@ namespace CharM.Maui;
 /// handler. Apple's contract: invoke <c>completionHandler</c> exactly once
 /// with the picked URLs, or with <c>null</c> on cancel.
 /// </summary>
+/// <remarks>
+/// This is a <em>wrapping</em> delegate, not a replacement. MAUI's
+/// <c>IOSWebViewManager.InitializeWebView()</c> assigns its own
+/// <c>WebViewUIDelegate</c> to <c>WKWebView.UIDelegate</c> shortly AFTER the
+/// <c>BlazorWebViewInitialized</c> event fires (confirmed by runtime logging:
+/// our delegate is clobbered ~1s post-init). MAUI's delegate implements the
+/// JavaScript alert / confirm / text-input panels but NOT
+/// <c>runOpenPanel</c>, which is why file inputs die. We therefore capture
+/// MAUI's delegate as <see cref="_inner"/>, implement <c>RunOpenPanel</c>
+/// ourselves, and transparently forward every other delegate selector
+/// (the JS dialogs, plus any future WebKit additions) back to MAUI's delegate
+/// via <c>forwardingTargetForSelector:</c> so none of its behavior regresses.
+/// <see cref="MainPage"/> owns the reconciliation that installs this wrapper
+/// once MAUI's delegate is present and keeps it in place.
+/// </remarks>
 internal sealed class BlazorFilePickerUIDelegate : WKUIDelegate
 {
+    // MAUI's original WKUIDelegate (IOSWebViewManager.WebViewUIDelegate).
+    // Held strongly: WKWebView.UIDelegate is a weak property and MAUI keeps
+    // no managed reference of its own once we replace it, so without this
+    // field MAUI's delegate (and its JS-dialog handling) could be collected.
+    private readonly IWKUIDelegate? _inner;
+
+    public BlazorFilePickerUIDelegate(IWKUIDelegate? inner)
+    {
+        _inner = inner;
+    }
+
+    public IWKUIDelegate? Inner => _inner;
+
     public override void RunOpenPanel(
         WKWebView webView,
         WKOpenPanelParameters parameters,
@@ -118,6 +147,34 @@ internal sealed class BlazorFilePickerUIDelegate : WKUIDelegate
             responder = responder.NextResponder;
         }
         return null;
+    }
+
+    // --- Delegate forwarding -------------------------------------------------
+    // We only implement RunOpenPanel. Every other WKUIDelegate selector that
+    // MAUI's original delegate responds to (JS alert / confirm / text-input
+    // panels, and anything WebKit adds in future) is forwarded to it so taking
+    // over UIDelegate doesn't regress MAUI's behavior. respondsToSelector: must
+    // also report those selectors as handled, otherwise WebKit skips them (it
+    // gates optional protocol methods on respondsToSelector:).
+
+    [Export("forwardingTargetForSelector:")]
+    public NSObject? GetForwardingTarget(Selector sel)
+    {
+        if (_inner is NSObject innerObj && innerObj.RespondsToSelector(sel))
+            return innerObj;
+        return null;
+    }
+
+    public override bool RespondsToSelector(Selector? sel)
+    {
+        // Selectors we implement directly (RunOpenPanel, the forwarding hooks,
+        // NSObject basics) are reported by the base implementation.
+        if (base.RespondsToSelector(sel))
+            return true;
+
+        // Otherwise defer to MAUI's delegate; GetForwardingTarget will route
+        // the actual invocation there.
+        return sel is not null && _inner is NSObject innerObj && innerObj.RespondsToSelector(sel);
     }
 
     private static UIWindow? GetKeyWindow()

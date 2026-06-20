@@ -5,10 +5,11 @@ namespace CharM.Maui;
 public partial class MainPage : ContentPage
 {
 #if MACCATALYST
-    // Hold a strong reference: WKWebView's UIDelegate is declared weak in
-    // Apple's headers, so without this the picker delegate could be
-    // garbage collected and the file picker would silently stop working.
+    // Strong reference to our wrapping delegate. WKWebView.UIDelegate is a weak
+    // property, so without this our delegate (and the MAUI delegate it wraps)
+    // could be garbage collected and the file picker would silently stop.
     private BlazorFilePickerUIDelegate? _filePickerDelegate;
+    private WebKit.WKWebView? _wkWebView;
 #endif
 
     public MainPage()
@@ -19,73 +20,74 @@ public partial class MainPage : ContentPage
     private void OnBlazorWebViewInitialized(object? sender, BlazorWebViewInitializedEventArgs e)
     {
 #if MACCATALYST
-        FilePickerLog.Info("init",
-            $"OnBlazorWebViewInitialized fired (e.WebView type: {e.WebView?.GetType().FullName ?? "<null>"})");
-
-        // WKWebView in BlazorWebView ships without a UIDelegate, which means
-        // <input type="file"> click events are dropped on Mac Catalyst (and
-        // iOS). Drag-and-drop works because that's a separate WebKit code
-        // path, but the file picker UI never appears. Installing a delegate
-        // that maps RunOpenPanel → UIDocumentPickerViewController restores
-        // the expected behavior. See BlazorFilePickerUIDelegate.cs.
+        // On Mac Catalyst <input type="file"> clicks are dropped because the
+        // active WKUIDelegate doesn't implement runOpenPanel. We can't simply
+        // assign our own delegate here: MAUI's IOSWebViewManager installs its
+        // OWN WebViewUIDelegate a moment AFTER this event fires, clobbering
+        // anything we set now (confirmed by runtime logging). So we reconcile —
+        // wait for MAUI's delegate to appear, then WRAP it with one that adds
+        // runOpenPanel and forwards everything else back to MAUI. See
+        // BlazorFilePickerUIDelegate.
         if (e.WebView is WebKit.WKWebView wkWebView)
         {
-            _filePickerDelegate = new BlazorFilePickerUIDelegate();
-            wkWebView.UIDelegate = _filePickerDelegate;
-
-            var stuck = wkWebView.UIDelegate;
-            FilePickerLog.Info("init",
-                $"UIDelegate assigned. Immediate read-back: {stuck?.GetType().FullName ?? "<null>"} " +
-                $"(matches: {ReferenceEquals(stuck, _filePickerDelegate)})");
-
-            FilePickerJsBridge.Install(wkWebView);
-
-            // The UIDelegate property is weak; even though we hold a strong
-            // ref via _filePickerDelegate, something on the MAUI / WebKit
-            // side could replace it later (re-init, layout pass, content
-            // controller swap). Poll a few times after init so a late
-            // replacement shows up clearly in the log instead of silently
-            // breaking the picker.
-            SchedulePostInitDelegateChecks(wkWebView);
+            _wkWebView = wkWebView;
+            _ = ReconcileFilePickerDelegateAsync();
         }
         else
         {
             FilePickerLog.Warn("init",
-                $"e.WebView is NOT a WKWebView — file-picker delegate NOT installed. " +
-                $"Actual type: {e.WebView?.GetType().FullName ?? "<null>"}");
+                $"e.WebView is not a WKWebView ({e.WebView?.GetType().FullName ?? "<null>"}); " +
+                "file picker delegate NOT installed");
         }
 #endif
     }
 
 #if MACCATALYST
-    private void SchedulePostInitDelegateChecks(WebKit.WKWebView wkWebView)
+    private async Task ReconcileFilePickerDelegateAsync()
     {
-        int[] delaysMs = { 1000, 5000, 15000, 30000 };
-        foreach (var ms in delaysMs)
+        // MAUI sets its delegate within ~1s of init. Poll for ~10s so we both
+        // install promptly once it appears and re-assert our wrapper if MAUI
+        // (or a layout/handler event) replaces it again. Cheap and bounded.
+        for (var i = 0; i < 40; i++)
         {
-            var capturedMs = ms;
-            _ = Task.Delay(capturedMs).ContinueWith(_ =>
+            await MainThread.InvokeOnMainThreadAsync(ReconcileFilePickerDelegate);
+            await Task.Delay(250);
+        }
+        await MainThread.InvokeOnMainThreadAsync(ReconcileFilePickerDelegate);
+    }
+
+    private void ReconcileFilePickerDelegate()
+    {
+        var webView = _wkWebView;
+        if (webView is null)
+            return;
+
+        try
+        {
+            var current = webView.UIDelegate;
+
+            // Our wrapper is already the active delegate — nothing to do.
+            if (_filePickerDelegate is not null && current is not null
+                && current.Handle == _filePickerDelegate.Handle)
             {
-                MainThread.BeginInvokeOnMainThread(() =>
-                {
-                    try
-                    {
-                        var current = wkWebView.UIDelegate;
-                        var matches = ReferenceEquals(current, _filePickerDelegate);
-                        var line =
-                            $"t+{capturedMs}ms UIDelegate={current?.GetType().FullName ?? "<null>"} " +
-                            $"(matches expected: {matches})";
-                        if (matches)
-                            FilePickerLog.Info("recheck", line);
-                        else
-                            FilePickerLog.Warn("recheck", $"UIDELEGATE REPLACED! {line}");
-                    }
-                    catch (Exception ex)
-                    {
-                        FilePickerLog.Error("recheck", $"t+{capturedMs}ms check threw", ex);
-                    }
-                });
-            }, TaskScheduler.Default);
+                return;
+            }
+
+            // MAUI hasn't installed its delegate yet; wait for the next tick.
+            if (current is null)
+                return;
+
+            // current is MAUI's (or some other) real delegate — wrap it so we
+            // add runOpenPanel while forwarding the rest back to it.
+            var wrapper = new BlazorFilePickerUIDelegate(current);
+            webView.UIDelegate = wrapper;
+            _filePickerDelegate = wrapper;
+            FilePickerLog.Info("install",
+                $"wrapped UIDelegate ({current.GetType().FullName}); runOpenPanel now handled");
+        }
+        catch (Exception ex)
+        {
+            FilePickerLog.Error("install", "reconcile failed", ex);
         }
     }
 #endif
