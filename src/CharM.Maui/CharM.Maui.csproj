@@ -60,6 +60,21 @@
        set explicitly, so it is deliberately unconditional across configs. -->
   <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">
     <CodesignEntitlements>Platforms\MacCatalyst\Entitlements.plist</CodesignEntitlements>
+    <!-- Disable the trimmer on Mac Catalyst. The rules database stores each
+         element's directives and fields as JSON and loads them at runtime via
+         reflection-based System.Text.Json (RulesDatabase.MapElement /
+         ParseFieldsJson). The trimmer strips the type metadata that reflection
+         needs, so in a trimmed Release build every element deserializes to
+         EMPTY (the `?? []` / `?? new()` fallbacks swallow the null), the level
+         grants never materialize, and character creation silently produces a
+         hollow session — no exception, just a dead-looking builder. Debug
+         builds aren't trimmed, which is why this only reproduced in Release.
+         On Mac Catalyst the managed linker is controlled by MtouchLink (NOT
+         PublishTrimmed, which is not honored here); None disables it entirely.
+         To re-enable trimming later, make the rules JSON trim-safe with a
+         System.Text.Json source-generated JsonSerializerContext (or root the
+         data assemblies via TrimmerRootAssembly) and remove this. -->
+    <MtouchLink>None</MtouchLink>
   </PropertyGroup>
 
   <ItemGroup>
