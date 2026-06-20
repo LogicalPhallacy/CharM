@@ -6,6 +6,14 @@
         <!-- App Sandbox is required to distribute through the Mac App Store. -->
         <key>com.apple.security.app-sandbox</key>
         <true/>
+        <!-- Required for the file picker (UIDocumentPickerViewController). On
+             Mac Catalyst the picker is hosted out-of-process by the system
+             powerbox; without this entitlement a sandboxed app's pick request
+             is denied and the panel never appears on screen even though UIKit
+             reports the presentation succeeded. read-write (not read-only) so
+             exported character files can also be saved to user-chosen paths. -->
+        <key>com.apple.security.files.user-selected.read-write</key>
+        <true/>
         <!-- When App Sandbox is enabled, this is required to make outgoing
              network connections (e.g. the BlazorWebView fetching static assets,
              or future HTTP-based features). -->

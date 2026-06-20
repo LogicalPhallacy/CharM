@@ -52,6 +52,16 @@
     <RuntimeIdentifier>$(RuntimeIdentifierOverride)</RuntimeIdentifier>
   </PropertyGroup>
 
+  <!-- Apply our entitlements to every Mac Catalyst build, not just Release.
+       Without CodesignEntitlements the build signs with default entitlements
+       and Platforms/MacCatalyst/Entitlements.plist is ignored entirely — which
+       is why the sandboxed file picker (user-selected files entitlement) never
+       took effect. Debug builds in particular skip entitlements unless this is
+       set explicitly, so it is deliberately unconditional across configs. -->
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">
+    <CodesignEntitlements>Platforms\MacCatalyst\Entitlements.plist</CodesignEntitlements>
+  </PropertyGroup>
+
   <ItemGroup>
     <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#FFD700" />
   </ItemGroup>
