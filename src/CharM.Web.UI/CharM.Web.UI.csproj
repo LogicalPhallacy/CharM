@@ -22,7 +22,7 @@
       standalone webserver) still gets the full ASP.NET Core framework via
       its own Microsoft.NET.Sdk.Web SDK, so it is unaffected.
     -->
-    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.9" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -69,6 +69,7 @@ $publishArgs = @(
     '-f', 'net10.0-maccatalyst'
     '-c', $Configuration
     '-p:CreatePackage=false'
+    '-p:TrimMode=copy'
     '-p:UseSharedCompilation=false'
 )
 switch ($Arch) {
