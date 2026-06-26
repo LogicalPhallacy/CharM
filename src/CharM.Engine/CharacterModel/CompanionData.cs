@@ -73,6 +73,22 @@ public sealed record CompanionData(
                 ?? ParseInt(baseCompanion.Fields.GetValueOrDefault(ability))
                 ?? 10;
 
+        // HoFK Sentinel / "shares your stats" companions (Wolf, Bear, ...)
+        // carry BASE defense/attack values in their fields and follow the
+        // rules text "its hit points, defenses, and attacks are determined
+        // by your level": defenses and attack bonus add the character level,
+        // HP equals the character's bloodied value, and it shares the
+        // character's healing surges. These companions are identified
+        // structurally — they have no paired Animal-Master power card and no
+        // explicit "Hit Points at 1st Level" field (which the FMP mounts and
+        // Animal-Master companions use to carry their own level-correct
+        // stats). This keeps Sterling's Animal-Master cat and the FMP mounts
+        // on their existing, already-correct path.
+        bool sharesYourStats = powerCard is null
+            && !baseCompanion.Fields.ContainsKey("Hit Points at 1st Level");
+
+        int? charHp = stats?.TryGetStat("Hit Points")?.ComputeValue(stats);
+
         var defenses = ParseDefenses(GetOverlaidField(powerCard, overlay, "Defenses"));
         if (defenses.IsEmpty)
         {
@@ -93,6 +109,46 @@ public sealed record CompanionData(
         if (surge is not null)
             surge = surge.Replace(" Surges per day", " surges per day", StringComparison.Ordinal);
 
+        int? attackBonus = ParseInt(baseCompanion.Fields.GetValueOrDefault("Attack Bonus"));
+        string? powerName = NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Companion Power"));
+        string? powerText = NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Power"));
+
+        if (sharesYourStats)
+        {
+            // Defenses and attack bonus add character level.
+            defenses = new ParsedDefenses(
+                defenses.Ac is { } a ? a + characterLevel : null,
+                defenses.Fortitude is { } f ? f + characterLevel : null,
+                defenses.Reflex is { } r ? r + characterLevel : null,
+                defenses.Will is { } w ? w + characterLevel : null);
+            if (attackBonus is { } ab) attackBonus = ab + characterLevel;
+
+            // HP = character's bloodied value (half max HP).
+            if (charHp is { } chp && chp > 0) hp = chp / 2;
+
+            // Shares the character's healing surges: companion surge value is
+            // half the character's surge value (= floor(maxHP / 8)), and it
+            // has 0 surges per day of its own. Mirrors OCB's Beast block,
+            // e.g. char HP 50 -> "6 (0 surges per day)".
+            if (charHp is { } chp2 && chp2 > 0)
+            {
+                int companionSurgeValue = (chp2 / 4) / 2;
+                surge = $"{companionSurgeValue} (0 surges per day)";
+            }
+
+            // OCB splits a "Name (Aura N): description" Power field into the
+            // BeastPower (name + colon) and BeastPowerText (description).
+            if (powerName is null && powerText is { } pt)
+            {
+                int colon = pt.IndexOf(':');
+                if (colon > 0)
+                {
+                    powerName = pt[..(colon + 1)].Trim();
+                    powerText = pt[(colon + 1)..].Trim();
+                }
+            }
+        }
+
         return new CompanionData(
             Category: baseCompanion.Name,
             Name: NullIfBlank(customName),
@@ -112,7 +168,7 @@ public sealed record CompanionData(
             HitPointsText: null,
             HitPointsNote: null,
             HealingSurgeText: surge,
-            AttackBonus: ParseInt(baseCompanion.Fields.GetValueOrDefault("Attack Bonus")),
+            AttackBonus: attackBonus,
             // OCB's Beast block reads the attack-name (e.g. "Claw") from the
             // BASE companion's "Attack" field — not from the powerCard's
             // overlaid "Attack" field, which holds the verbose "Beast's
@@ -128,8 +184,8 @@ public sealed record CompanionData(
             Vision: NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Vision")
                 ?? baseCompanion.Fields.GetValueOrDefault("Senses")),
             TrainedSkills: ResolveTrainedSkillNames(baseCompanion.Fields.GetValueOrDefault("Trained Skills"), findById),
-            PowerName: NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Companion Power")),
-            PowerText: NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Power")),
+            PowerName: powerName,
+            PowerText: powerText,
             ExtraPowers: Array.Empty<CompanionExtraPower>(),
             IsMinion: false,
             IsSummon: false,
@@ -323,6 +379,42 @@ public sealed record CompanionData(
             return true;
         return element.Fields.ContainsKey("Constant Benefits")
                && element.Fields.ContainsKey("Secondary Speed");
+    }
+
+    private static readonly string[] CompanionDefenseFields =
+        ["Armor Class", "Fortitude Defense", "Reflex Defense", "Will Defense"];
+
+    /// <summary>
+    /// True when a <c>type="Companion"</c> element carries a renderable
+    /// creature stat block (its own ability scores plus a defense or attack
+    /// stat), as opposed to a per-level overlay stub that only holds
+    /// <c>Short Description</c> / <c>Associated Power(s)</c>.
+    ///
+    /// <para>This is the GENERAL signal the mini-sheet pipeline keys on,
+    /// replacing the historical over-gate on the single
+    /// <c>"Hit Points at 1st Level"</c> field (which only the two FMP mount
+    /// companions, Horse and Simian, happened to carry). The structural
+    /// signature — ability scores + (defense | attack) — is shared by every
+    /// base companion regardless of its id family: the HoFK Sentinel
+    /// Wolf/Bear (<c>ID_WOG_COMPANION_*</c>), the FMP mounts
+    /// (<c>ID_FMP_COMPANION_*</c>), and any future stat-block companion.
+    /// The 1781 Tivaan per-level overlay stubs
+    /// (<c>ID_TIV_FEAT_ANIMAL_COMPANION-*</c>) carry no ability or defense
+    /// fields and are correctly excluded (they remain placeholder
+    /// Beast-block clones for OCB export parity).</para>
+    /// </summary>
+    public static bool IsBaseStatBlockCompanion(RulesElement element)
+    {
+        if (!string.Equals(element.Type, "Companion", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        bool hasAbilities = AbilityNames.FullNames.Any(element.Fields.ContainsKey)
+            || element.Fields.ContainsKey("Hit Points at 1st Level");
+        bool hasDefense = CompanionDefenseFields.Any(element.Fields.ContainsKey);
+        bool hasAttack = element.Fields.ContainsKey("Attack Bonus")
+            || element.Fields.ContainsKey("Damage");
+
+        return hasAbilities && (hasDefense || hasAttack);
     }
 
     /// <summary>

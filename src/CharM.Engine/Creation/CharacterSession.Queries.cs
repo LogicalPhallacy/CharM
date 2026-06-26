@@ -123,8 +123,7 @@ public sealed partial class CharacterSession
 
         var allElements = _wizard.ElementTree.GetActiveElements().ToList();
         var baseCompanions = allElements
-            .Where(e => string.Equals(e.Type, "Companion", StringComparison.OrdinalIgnoreCase))
-            .Where(e => e.Fields.ContainsKey("Hit Points at 1st Level"))
+            .Where(CompanionData.IsBaseStatBlockCompanion)
             .ToList();
 
         var companionPowers = allElements
