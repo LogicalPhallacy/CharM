@@ -61,6 +61,8 @@ public static class RulesDbBuilder
             // Commit remaining rows
             tx.Commit();
             progress?.Report(count);
+
+            RegisterBaseLayer(connection, xmlPath, count);
         }
         finally
         {
@@ -144,5 +146,33 @@ public static class RulesDbBuilder
         using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Record the base (WotC compendium XML) as layer 0 in part_registry, and
+    /// stamp db_meta with build provenance. Provenance for individual base
+    /// elements is implicit (everything present after this point with no part
+    /// provenance row came from the base).
+    /// </summary>
+    private static void RegisterBaseLayer(SqliteConnection connection, string xmlPath, int elementCount)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO part_registry
+                (part_id, filename, category, display_name, version,
+                 content_hash, source_url, enabled, layer_order, is_base, applied_at)
+            VALUES ('base', $fn, 'base', 'WotC compendium base', NULL,
+                    NULL, NULL, 1, 0, 1, $now)
+            ON CONFLICT(part_id) DO UPDATE SET
+                filename = excluded.filename,
+                applied_at = excluded.applied_at
+            """;
+        cmd.Parameters.AddWithValue("$fn", Path.GetFileName(xmlPath));
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+
+        RulesDbSchema.SetMeta(connection, "built_at", DateTimeOffset.UtcNow.ToString("o"));
+        RulesDbSchema.SetMeta(connection, "base_element_count", elementCount.ToString());
+        RulesDbSchema.SetMeta(connection, "provenance_known", "true");
     }
 }

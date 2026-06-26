@@ -24,6 +24,8 @@ public static class MauiProgram
         // a service here means a component injection throws at render time
         // and the WebView is stuck on the static "Loading..." HTML.
         builder.Services.AddSingleton<RulesDatabaseService>();
+        builder.Services.AddSingleton<PartManagementService>();
+        builder.Services.AddSingleton<PartPreferencesStore>();
         builder.Services.AddSingleton<IRulesDatabase>(sp =>
             sp.GetRequiredService<RulesDatabaseService>());
         builder.Services.AddScoped<CharacterSessionService>();

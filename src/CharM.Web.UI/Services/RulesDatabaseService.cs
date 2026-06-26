@@ -1,4 +1,5 @@
 using CharM.Engine.Rules;
+using CharM.Engine.Selection;
 using CharM.RulesDb.Import;
 using CharM.RulesDb.Storage;
 
@@ -130,6 +131,19 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
         try
         {
+            // Best-effort: bring legacy databases (built before the metadata
+            // tables existed) forward in place. Requires write access; if the
+            // file is read-only or locked we proceed without metadata — the DB
+            // still works for read-only querying.
+            try
+            {
+                RulesDbUpconverter.Upconvert(fullPath);
+            }
+            catch
+            {
+                // non-fatal: metadata features degrade, querying still works
+            }
+
             ReplaceDatabase(new RulesDatabase(fullPath), fullPath);
             SetStatus($"Loaded rules database: {Path.GetFileName(fullPath)}", isError: false);
             // A successful load exits manage mode automatically — wizard goes away.
@@ -271,24 +285,29 @@ public sealed class RulesDatabaseService : IRulesDatabase
         {
             await Task.Run(() =>
             {
-                SetProgress(new DbBuildProgress("Importing rules elements"));
-                RulesDbBuilder.Import(xmlPath, dbPath, new Progress<int>(count =>
-                    SetProgress(new DbBuildProgress("Importing rules elements", Current: count))));
-
-                if (Directory.EnumerateFiles(partsDirectory).Any())
-                {
-                    SetProgress(new DbBuildProgress("Merging part files"));
-                    PartMerger.Merge(dbPath, partsDirectory, new Progress<string>(message =>
-                        SetProgress(new DbBuildProgress("Merging part files", Detail: message.Trim()))));
-                }
-
+                // Pull indexed parts (if any) into the same directory so they
+                // are archived and toggleable alongside uploaded parts.
                 if (!string.IsNullOrWhiteSpace(partIndexUrl))
                 {
                     SetProgress(new DbBuildProgress("Downloading indexed part files"));
-                    var mergeResult = PartMerger.MergeFromIndex(dbPath, partIndexUrl.Trim(), new Progress<string>(message =>
-                        SetProgress(new DbBuildProgress("Downloading indexed part files", Detail: message.Trim()))));
-                    SetProgress(new DbBuildProgress("Merged indexed part files", Detail: $"{mergeResult.FilesProcessed:N0} file(s)"));
+                    PartMerger.DownloadIndexParts(partIndexUrl.Trim(), partsDirectory,
+                        new Progress<string>(message =>
+                            SetProgress(new DbBuildProgress("Downloading indexed part files", Detail: message.Trim()))));
                 }
+
+                // Build through the layered store: imports the base snapshot,
+                // archives every part, writes the manifest, and materializes the
+                // working rules.db. This enables later enable/disable + rebuild.
+                var store = new RulesDbLayerStore(_workingDirectory);
+                var stagedParts = Directory.GetFiles(partsDirectory, "*.part")
+                    .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+                    .Select(f => (Path: f, PartId: Path.GetFileName(f), Category: (string?)null))
+                    .ToList();
+
+                SetProgress(new DbBuildProgress("Importing rules elements"));
+                store.Initialize(xmlPath, stagedParts, dbPath,
+                    new Progress<string>(message =>
+                        SetProgress(new DbBuildProgress("Building rules database", Detail: message.Trim()))));
             }, cancellationToken);
         }
         finally
@@ -329,6 +348,31 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
     public IEnumerable<string> GetDistinctSources()
         => Current.GetDistinctSources();
+
+    public IReadOnlyList<PartLayer> GetPartLayers()
+        => Current.GetPartLayers();
+
+    public string? GetElementProvenanceCategory(string internalId)
+        => Current.GetElementProvenanceCategory(internalId);
+
+    /// <summary>
+    /// Build a provenance-based legality classifier for the loaded DB: elements
+    /// introduced/modified by a Homebrew part are HouseRule, by other overlay
+    /// parts (UnearthedArcana / sorted / 3rdParty) are PartFile, otherwise
+    /// RulesLegal. Returns null when no DB is loaded.
+    /// </summary>
+    public Func<RulesElement, LegalitySource?>? CreateProvenanceClassifier()
+    {
+        if (!IsLoaded) return null;
+        return element =>
+        {
+            var category = GetElementProvenanceCategory(element.InternalId);
+            if (category is null) return null; // base-only → fall back to heuristic
+            return string.Equals(category, "Homebrew", StringComparison.OrdinalIgnoreCase)
+                ? LegalitySource.HouseRule
+                : LegalitySource.PartFile;
+        };
+    }
 
     public int Count => Current.Count;
 

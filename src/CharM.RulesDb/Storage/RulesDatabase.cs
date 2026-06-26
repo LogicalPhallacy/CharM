@@ -23,11 +23,37 @@ public interface IRulesDatabase : IDisposable
     int Count { get; }
 
     /// <summary>
+    /// Registered part layers (base + overlays) from the metadata tables.
+    /// Empty when the DB predates the metadata schema. Off the read path.
+    /// </summary>
+    IReadOnlyList<PartLayer> GetPartLayers() => [];
+
+    /// <summary>
+    /// Category of the highest-precedence part that created/overwrote the given
+    /// element (e.g. "Homebrew", "UnearthedArcana", "sorted"), or null when the
+    /// element comes only from the base or provenance is unknown.
+    /// </summary>
+    string? GetElementProvenanceCategory(string internalId) => null;
+
+    /// <summary>
     /// Optional cache pre-warm. Implementations may load all elements at once
     /// so subsequent lookups are lock-free. Safe to call multiple times.
     /// </summary>
     void Preload() { }
 }
+
+/// <summary>
+/// A registered layer (base snapshot or part overlay) in the rules database.
+/// </summary>
+public sealed record PartLayer(
+    string PartId,
+    string Filename,
+    string? Category,
+    string? DisplayName,
+    string? Version,
+    bool Enabled,
+    int LayerOrder,
+    bool IsBase);
 
 /// <summary>
 /// SQLite-backed implementation of <see cref="IRulesDatabase"/>.
@@ -381,6 +407,67 @@ public sealed class RulesDatabase : IRulesDatabase
             _distinctSourcesCache = [.. sources];
             return _distinctSourcesCache;
         }
+    }
+
+    public IReadOnlyList<PartLayer> GetPartLayers()
+    {
+        lock (_queryLock)
+        {
+            if (!TableExists("part_registry"))
+                return [];
+
+            var layers = new List<PartLayer>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT part_id, filename, category, display_name, version, enabled, layer_order, is_base
+                FROM part_registry ORDER BY layer_order
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                layers.Add(new PartLayer(
+                    PartId: reader.GetString(0),
+                    Filename: reader.GetString(1),
+                    Category: reader.IsDBNull(2) ? null : reader.GetString(2),
+                    DisplayName: reader.IsDBNull(3) ? null : reader.GetString(3),
+                    Version: reader.IsDBNull(4) ? null : reader.GetString(4),
+                    Enabled: reader.GetInt64(5) != 0,
+                    LayerOrder: (int)reader.GetInt64(6),
+                    IsBase: reader.GetInt64(7) != 0));
+            }
+            return layers;
+        }
+    }
+
+    public string? GetElementProvenanceCategory(string internalId)
+    {
+        lock (_queryLock)
+        {
+            if (!TableExists("part_provenance"))
+                return null;
+
+            // Highest-precedence (largest layer_order) non-base part that
+            // created or overwrote the element wins.
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT r.category
+                FROM part_provenance p
+                JOIN part_registry r ON r.part_id = p.part_id
+                WHERE p.internal_id = $id AND r.is_base = 0 AND r.category IS NOT NULL
+                ORDER BY r.layer_order DESC
+                LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue("$id", internalId);
+            return cmd.ExecuteScalar() as string;
+        }
+    }
+
+    private bool TableExists(string name)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$n LIMIT 1";
+        cmd.Parameters.AddWithValue("$n", name);
+        return cmd.ExecuteScalar() is not null;
     }
 
     public int Count

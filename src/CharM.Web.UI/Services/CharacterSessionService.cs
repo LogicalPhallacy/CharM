@@ -43,6 +43,13 @@ public sealed class CharacterSessionService : IDisposable
     public IEnumerable<string> GetAvailableSources()
         => _db.IsLoaded ? _db.GetDistinctSources() : [];
 
+    /// <summary>
+    /// Sourcebooks enabled for character creation. Null/empty means all are
+    /// enabled. Applied to new sessions; sourceless (houserule) elements are
+    /// always allowed regardless. Persisting this is handled by the caller.
+    /// </summary>
+    public IReadOnlySet<string>? EnabledSources { get; set; }
+
     /// <summary>Start a new character session at the given level.</summary>
     public CharacterSession NewCharacter(int level = 1, string? sourceFilter = null)
     {
@@ -55,6 +62,15 @@ public sealed class CharacterSessionService : IDisposable
 
         if (sourceFilter is not null)
             session.SourceFilter = sourceFilter;
+
+        if (EnabledSources is { Count: > 0 })
+            session.EnabledSources = EnabledSources;
+
+        // Capture the enabled part layers this character is being built with so
+        // it can be audited later against whatever rules DB it is opened under.
+        foreach (var layer in _db.GetPartLayers())
+            if (layer.Enabled && !layer.IsBase)
+                session.BuildProvenance.Add(new RecordedPart(layer.PartId, layer.Version, layer.Category));
 
         SetSession(session);
         return session;
@@ -70,6 +86,19 @@ public sealed class CharacterSessionService : IDisposable
         _displayPowerStatsCache = null;
         _sessionVersion++;
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Audit the current session's recorded build provenance against the loaded
+    /// rules database. Returns an empty list when there is no session, no
+    /// recorded provenance, or nothing is amiss. Alerts only fire for missing
+    /// parts or a database older than what the character was built with.
+    /// </summary>
+    public IReadOnlyList<PartAuditAlert> AuditCurrentSession()
+    {
+        if (_session is null || _session.BuildProvenance.Count == 0 || !_db.IsLoaded)
+            return [];
+        return PartAuditService.Audit(_session.BuildProvenance, _db.GetPartLayers());
     }
 
     /// <summary>Load a .dnd4e file into a fresh editable session.</summary>

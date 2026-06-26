@@ -26,36 +26,48 @@ public static partial class PartMerger
         _ = Directory.CreateDirectory(tempPath);
         try
         {
-            using var downloadClient = new HttpClient();
-            var indexUri = new Uri(indexFileUrl, UriKind.Absolute);
-
-            progress?.Report($"Downloading part index {indexUri}");
-            using var indexResp = downloadClient.GetAsync(indexUri).GetAwaiter().GetResult();
-            indexResp.EnsureSuccessStatusCode();
-
-            using var indexStream = indexResp.Content.ReadAsStream();
-            var doc = XDocument.Load(indexStream);
-            doc.Save(Path.Combine(tempPath, "WotC.index"));
-
-            List<Task> tasks = new();
-            foreach (var part in doc.Descendants("Part"))
-            {
-                string? filename = part.Element("Filename")?.Value?.Trim();
-                string? address = part.Element("PartAddress")?.Value.Trim();
-                if (string.IsNullOrWhiteSpace(filename) || string.IsNullOrWhiteSpace(address))
-                    continue;
-
-                var partUri = new Uri(indexUri, address);
-                tasks.Add(DownloadPart(downloadClient, partUri, filename, tempPath, progress));
-            }
-
-            Task.WhenAll(tasks).GetAwaiter().GetResult();
+            DownloadIndexParts(indexFileUrl, tempPath, progress);
             return Merge(dbPath, tempPath, progress);
         }
         finally
         {
             Directory.Delete(tempPath, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// Download every part referenced by a CBLoader index file into
+    /// <paramref name="destDirectory"/> (also saving the index as WotC.index).
+    /// Does not merge — used by the layered store so downloaded parts can be
+    /// archived and toggled like local ones.
+    /// </summary>
+    public static void DownloadIndexParts(string indexFileUrl, string destDirectory, IProgress<string>? progress = null)
+    {
+        Directory.CreateDirectory(destDirectory);
+        using var downloadClient = new HttpClient();
+        var indexUri = new Uri(indexFileUrl, UriKind.Absolute);
+
+        progress?.Report($"Downloading part index {indexUri}");
+        using var indexResp = downloadClient.GetAsync(indexUri).GetAwaiter().GetResult();
+        indexResp.EnsureSuccessStatusCode();
+
+        using var indexStream = indexResp.Content.ReadAsStream();
+        var doc = XDocument.Load(indexStream);
+        doc.Save(Path.Combine(destDirectory, "WotC.index"));
+
+        List<Task> tasks = new();
+        foreach (var part in doc.Descendants("Part"))
+        {
+            string? filename = part.Element("Filename")?.Value?.Trim();
+            string? address = part.Element("PartAddress")?.Value.Trim();
+            if (string.IsNullOrWhiteSpace(filename) || string.IsNullOrWhiteSpace(address))
+                continue;
+
+            var partUri = new Uri(indexUri, address);
+            tasks.Add(DownloadPart(downloadClient, partUri, filename, destDirectory, progress));
+        }
+
+        Task.WhenAll(tasks).GetAwaiter().GetResult();
     }
 
     private static async Task DownloadPart(
@@ -82,12 +94,27 @@ public static partial class PartMerger
     public static MergeResult Merge(string dbPath, string partsDirectory, IProgress<string>? progress = null)
     {
         var obsolete = LoadObsoleteSet(partsDirectory);
+        string? category = DeriveCategory(partsDirectory);
 
         var partFiles = Directory.GetFiles(partsDirectory, "*.part")
             .Where(f => !obsolete.Contains(Path.GetFileName(f)))
             .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+            .Select(f => new PartSourceFile(f, Path.GetFileName(f), category))
             .ToList();
 
+        return MergeFiles(dbPath, partFiles, progress);
+    }
+
+    /// <summary>
+    /// Merge an explicit, ordered list of part files into the database. Unlike
+    /// <see cref="Merge(string,string,IProgress{string})"/> this does not glob a
+    /// directory — the caller controls exactly which parts apply and in what
+    /// order. Used by the layered rebuild service to materialize a working DB
+    /// from a chosen enabled set.
+    /// </summary>
+    public static MergeResult MergeFiles(
+        string dbPath, IReadOnlyList<PartSourceFile> orderedParts, IProgress<string>? progress = null)
+    {
         int filesProcessed = 0, added = 0, updated = 0, deleted = 0, appended = 0;
 
         using var connection = new SqliteConnection($"Data Source={dbPath}");
@@ -99,20 +126,30 @@ public static partial class PartMerger
         RulesDbSchema.Create(connection);
 
         var jsonOptions = RulesDatabase.SharedJsonOptions;
+        int layerOrder = NextLayerOrder(connection);
 
-        foreach (var partFile in partFiles)
+        foreach (var part in orderedParts)
         {
-            string fileName = Path.GetFileName(partFile);
+            string fileName = Path.GetFileName(part.Path);
             progress?.Report($"  {fileName}");
 
             XDocument doc;
-            try { doc = XDocument.Load(partFile); }
+            try { doc = XDocument.Load(part.Path); }
             catch { continue; }
 
             var root = doc.Root;
             if (root is null) continue;
 
+            PartFileInfo partInfo;
+            try { partInfo = PartMetadataReader.Read(part.Path, partId: part.PartId, category: part.Category); }
+            catch { partInfo = null!; }
+
             using var tx = connection.BeginTransaction();
+
+            if (partInfo is not null)
+                RegisterPart(connection, tx, partInfo, layerOrder++);
+
+            string partId = partInfo?.PartId ?? part.PartId;
 
             foreach (var el in root.Elements())
             {
@@ -124,6 +161,8 @@ public static partial class PartMerger
                         if (parsed is null) continue;
                         bool exists = ElementExists(connection, tx, parsed.Element.InternalId);
                         UpsertElement(connection, tx, parsed, jsonOptions);
+                        RecordProvenance(connection, tx, parsed.Element.InternalId, partId,
+                            exists ? "overwrite" : "create");
                         if (exists) updated++; else added++;
                         break;
                     }
@@ -132,6 +171,7 @@ public static partial class PartMerger
                         string? id = Attr(el, "internal-id");
                         if (id is null) continue;
                         appended += AppendToElement(connection, tx, id, el, jsonOptions);
+                        RecordProvenance(connection, tx, id, partId, "append");
                         break;
                     }
                     case "DeleteElement":
@@ -139,6 +179,7 @@ public static partial class PartMerger
                         string? id = Attr(el, "internal-id");
                         if (id is null) continue;
                         deleted += DeleteElement(connection, tx, id);
+                        RecordProvenance(connection, tx, id, partId, "delete");
                         break;
                     }
                     case "MassAppend":
@@ -146,7 +187,10 @@ public static partial class PartMerger
                         string? ids = Attr(el, "ids");
                         if (ids is null) continue;
                         foreach (var id in ids.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                        {
                             appended += AppendToElement(connection, tx, id, el, jsonOptions);
+                            RecordProvenance(connection, tx, id, partId, "append");
+                        }
                         break;
                     }
                 }
@@ -157,6 +201,71 @@ public static partial class PartMerger
         }
 
         return new MergeResult(filesProcessed, added, updated, deleted, appended);
+    }
+
+    private static readonly HashSet<string> KnownCategories =
+        new(StringComparer.OrdinalIgnoreCase) { "sorted", "UnearthedArcana", "Homebrew", "3rdParty" };
+
+    private static string? DeriveCategory(string partsDirectory)
+    {
+        string folder = Path.GetFileName(Path.TrimEndingDirectorySeparator(partsDirectory));
+        return KnownCategories.Contains(folder) ? folder : null;
+    }
+
+    private static int NextLayerOrder(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COALESCE(MAX(layer_order), 0) + 1 FROM part_registry";
+        var result = cmd.ExecuteScalar();
+        return result is long l ? (int)l : 1;
+    }
+
+    private static void RegisterPart(SqliteConnection conn, SqliteTransaction tx, PartFileInfo info, int layerOrder)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO part_registry
+                (part_id, filename, category, display_name, version,
+                 content_hash, source_url, enabled, layer_order, is_base, applied_at)
+            VALUES ($id, $fn, $cat, $disp, $ver, $hash, $url, 1, $order, 0, $now)
+            ON CONFLICT(part_id) DO UPDATE SET
+                filename = excluded.filename,
+                category = excluded.category,
+                display_name = excluded.display_name,
+                version = excluded.version,
+                content_hash = excluded.content_hash,
+                source_url = excluded.source_url,
+                layer_order = excluded.layer_order,
+                applied_at = excluded.applied_at
+            """;
+        cmd.Parameters.AddWithValue("$id", info.PartId);
+        cmd.Parameters.AddWithValue("$fn", info.Filename);
+        cmd.Parameters.AddWithValue("$cat", (object?)info.Category ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$disp", (object?)(info.Description ?? info.Filename) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$ver", (object?)info.Version ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$hash", info.ContentHash);
+        cmd.Parameters.AddWithValue("$url", (object?)info.PartAddress ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$order", layerOrder);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void RecordProvenance(SqliteConnection conn, SqliteTransaction tx, string internalId, string partId, string op)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        // Last writer wins per (element, part): a part that touches an element
+        // multiple times records its final op.
+        cmd.CommandText = """
+            INSERT INTO part_provenance (internal_id, part_id, op)
+            VALUES ($id, $part, $op)
+            ON CONFLICT(internal_id, part_id) DO UPDATE SET op = excluded.op
+            """;
+        cmd.Parameters.AddWithValue("$id", internalId);
+        cmd.Parameters.AddWithValue("$part", partId);
+        cmd.Parameters.AddWithValue("$op", op);
+        cmd.ExecuteNonQuery();
     }
 
     // ========================================================================
@@ -663,3 +772,10 @@ public sealed record MergeResult(
     int ElementsUpdated,
     int ElementsDeleted,
     int NodesAppended);
+
+/// <summary>
+/// A single part file to merge, with its stable id and category. Used by
+/// <see cref="PartMerger.MergeFiles"/> so callers control the exact set and
+/// order of parts applied (e.g. the layered rebuild service).
+/// </summary>
+public sealed record PartSourceFile(string Path, string PartId, string? Category);

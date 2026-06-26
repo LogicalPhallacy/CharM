@@ -37,6 +37,11 @@
                         <span class="material-symbols-outlined text-lg">description</span>
                         Details
                     </NavLink>
+                    <NavLink href="/rules-parts" class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-medium text-on-surface-variant rounded hover:bg-surface-container-low transition-colors"
+                             ActiveClass="bg-surface-container-low text-on-surface font-semibold">
+                        <span class="material-symbols-outlined text-lg">extension</span>
+                        Parts
+                    </NavLink>
                 </div>
             </div>
 
@@ -53,6 +58,7 @@
 <main class="max-w-screen-2xl mx-auto px-4 md:px-8 py-6">
     <CharacterPersistence />
     <RestoreOverlay />
+    <AuditAlertBanner />
     @Body
 </main>
 

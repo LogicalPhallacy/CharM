@@ -1,0 +1,40 @@
+@using CharM.Web.Services
+@inject CharacterSessionService SessionService
+@implements IDisposable
+
+@{
+    var alerts = SessionService.AuditCurrentSession();
+}
+@if (alerts.Count > 0)
+{
+    <div class="mb-4 p-4 rounded bg-error-container text-on-error-container no-print">
+        <div class="flex items-start gap-2">
+            <span class="material-symbols-outlined">warning</span>
+            <div>
+                <p class="font-label font-semibold mb-1">
+                    This character was built with part files that don't match the current rules database.
+                </p>
+                <ul class="list-disc ml-5 text-sm space-y-0.5">
+                    @foreach (var a in alerts)
+                    {
+                        <li>@a.Message</li>
+                    }
+                </ul>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        SessionService.Changed += OnChanged;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        SessionService.Changed -= OnChanged;
+    }
+}

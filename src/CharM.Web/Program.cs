@@ -20,6 +20,8 @@ builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions>(options =>
 });
 
 builder.Services.AddSingleton<RulesDatabaseService>();
+builder.Services.AddSingleton<PartManagementService>();
+builder.Services.AddSingleton<PartPreferencesStore>();
 builder.Services.AddSingleton<CharM.RulesDb.Storage.IRulesDatabase>(sp =>
     sp.GetRequiredService<RulesDatabaseService>());
 

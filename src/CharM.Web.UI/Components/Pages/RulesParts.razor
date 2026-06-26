@@ -1,0 +1,292 @@
+@page "/rules-parts"
+@using CharM.RulesDb.Import
+@using CharM.Web.Services
+@inject PartManagementService Parts
+@inject PartPreferencesStore Preferences
+@inject RulesDatabaseService RulesDatabase
+@inject CharacterSessionService SessionService
+
+<PageTitle>Rules Parts - CharM</PageTitle>
+
+<main class="p-6 lg:p-10 max-w-screen-xl mx-auto w-full">
+    <div class="flex items-center gap-3 mb-6">
+        <span class="material-symbols-outlined text-primary text-4xl">extension</span>
+        <div>
+            <h1 class="font-headline text-3xl font-bold text-on-surface">Rules parts &amp; overlays</h1>
+            <p class="text-sm text-on-surface-variant">Enable or disable part-file overlays, and check the configured source for updates.</p>
+        </div>
+    </div>
+
+    @if (!Parts.IsLayered)
+    {
+        <div class="p-4 bg-surface-container-low rounded ghost-border text-sm text-on-surface-variant">
+            This database wasn't built through the layered pipeline, so individual parts can't be toggled.
+            Rebuild it from the rules XML + part files (Manage rules database) to enable part management.
+        </div>
+    }
+    else
+    {
+        <!-- ============ Remote source / updates ============ -->
+        <section class="mb-8 p-5 bg-surface-container-low rounded ghost-border">
+            <h2 class="font-headline text-xl font-bold text-on-surface mb-3">Update source</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                <label class="text-sm text-on-surface flex flex-col gap-1">
+                    <span class="text-xs uppercase tracking-wider text-on-surface-variant">Provider</span>
+                    <select @bind="_kind" class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline">
+                        <option value="@PartSourceKind.GitHub">GitHub</option>
+                        <option value="@PartSourceKind.CbloaderHost">CBLoader host</option>
+                    </select>
+                </label>
+                @if (_kind == PartSourceKind.GitHub)
+                {
+                    <label class="text-sm text-on-surface flex flex-col gap-1 md:col-span-2">
+                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">owner/repo</span>
+                        <input @bind="_ownerRepo" placeholder="LogicalPhallacy/cbparts"
+                               class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
+                    </label>
+                    <label class="text-sm text-on-surface flex flex-col gap-1">
+                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">ref</span>
+                        <input @bind="_ref" placeholder="master"
+                               class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
+                    </label>
+                }
+                else
+                {
+                    <label class="text-sm text-on-surface flex flex-col gap-1 md:col-span-3">
+                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">Host base URL</span>
+                        <input @bind="_hostUrl" placeholder="https://cbloader.vorpald20.com/"
+                               class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
+                    </label>
+                }
+            </div>
+            <div class="flex gap-3 mt-4">
+                <button @onclick="CheckUpdatesAsync" disabled="@_busy"
+                        class="px-4 py-2 bg-primary text-on-primary font-label font-semibold rounded hover:bg-primary-dim disabled:opacity-40">
+                    Check for updates
+                </button>
+                @if (_report is not null && _report.HasUpdates)
+                {
+                    <button @onclick="ApplyUpdatesAsync" disabled="@_busy"
+                            class="px-4 py-2 bg-secondary text-on-secondary font-label font-semibold rounded hover:opacity-90 disabled:opacity-40">
+                        Download &amp; apply (@(_report.New.Count() + _report.Updated.Count()))
+                    </button>
+                }
+            </div>
+
+            @if (_report is not null)
+            {
+                <p class="text-sm text-on-surface-variant mt-3">
+                    @_report.New.Count() new, @_report.Updated.Count() updated,
+                    @_report.MissingRemotely.Count() missing remotely.
+                </p>
+            }
+        </section>
+
+        <!-- ============ Installed part layers ============ -->
+        <section class="p-5 bg-surface-container-low rounded ghost-border">
+            <h2 class="font-headline text-xl font-bold text-on-surface mb-3">Installed parts</h2>
+            @foreach (var group in GetLayers().GroupBy(p => p.Category ?? "uncategorized"))
+            {
+                <h3 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mt-4 mb-1">@group.Key</h3>
+                <ul class="divide-y divide-outline/30">
+                    @foreach (var part in group)
+                    {
+                        <li class="flex items-center justify-between py-2">
+                            <div>
+                                <span class="text-sm text-on-surface">@part.Filename</span>
+                                @if (part.Version is not null)
+                                {
+                                    <span class="text-xs text-on-surface-variant ml-2">v@part.Version</span>
+                                }
+                            </div>
+                            <label class="inline-flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked="@part.Enabled" disabled="@_busy"
+                                       @onchange="@(e => TogglePartAsync(part.PartId, (bool)e.Value!))" />
+                                <span class="text-xs text-on-surface-variant">@(part.Enabled ? "enabled" : "disabled")</span>
+                            </label>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    }
+
+    @if (_message is not null)
+    {
+        <div class="mt-6 p-3 rounded text-sm font-label @(_isError ? "bg-error-container text-on-error-container" : "bg-success-container text-on-success-container")">
+            @_message
+        </div>
+    }
+    @if (_busy)
+    {
+        <p class="mt-3 text-sm text-on-surface-variant animate-pulse">Working… rebuilding the rules database.</p>
+    }
+
+    <!-- ============ Sourcebooks ============ -->
+    @if (RulesDatabase.IsLoaded && _allSources.Count > 0)
+    {
+        <section class="mt-8 p-5 bg-surface-container-low rounded ghost-border">
+            <h2 class="font-headline text-xl font-bold text-on-surface mb-1">Sourcebooks</h2>
+            <p class="text-xs text-on-surface-variant mb-3">
+                Disable sourcebooks your group doesn't use. Applies to newly created characters.
+                Houserule (sourceless) content is always available.
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1 max-h-80 overflow-y-auto">
+                @foreach (var src in _allSources)
+                {
+                    <label class="inline-flex items-center gap-2 text-sm text-on-surface cursor-pointer py-1">
+                        <input type="checkbox" checked="@IsSourceEnabled(src)"
+                               @onchange="@(e => ToggleSource(src, (bool)e.Value!))" />
+                        <span>@src</span>
+                    </label>
+                }
+            </div>
+        </section>
+    }
+</main>
+
+@code {
+    private bool _busy;
+    private string? _message;
+    private bool _isError;
+
+    private PartSourceKind _kind = PartSourceKind.GitHub;
+    private string? _ownerRepo;
+    private string _ref = "master";
+    private string? _hostUrl;
+    private PartUpdateReport? _report;
+
+    private List<string> _allSources = [];
+    private HashSet<string> _enabledSources = new(StringComparer.OrdinalIgnoreCase);
+    private bool _allSourcesEnabled = true;
+
+    protected override void OnInitialized()
+    {
+        var cfg = Preferences.LoadSourceConfig();
+        if (cfg is not null)
+        {
+            _kind = cfg.Kind;
+            if (!string.IsNullOrWhiteSpace(cfg.Owner) && !string.IsNullOrWhiteSpace(cfg.Repo))
+                _ownerRepo = $"{cfg.Owner}/{cfg.Repo}";
+            _ref = string.IsNullOrWhiteSpace(cfg.Ref) ? "master" : cfg.Ref;
+            _hostUrl = cfg.HostBaseUrl;
+        }
+
+        _allSources = RulesDatabase.IsLoaded
+            ? RulesDatabase.GetDistinctSources().OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList()
+            : [];
+
+        var persisted = Preferences.LoadEnabledSources();
+        if (persisted is { Count: > 0 })
+        {
+            _enabledSources = new HashSet<string>(persisted, StringComparer.OrdinalIgnoreCase);
+            _allSourcesEnabled = false;
+            SessionService.EnabledSources = _enabledSources;
+        }
+        else
+        {
+            // No restriction persisted → all sources enabled.
+            _enabledSources = new HashSet<string>(_allSources, StringComparer.OrdinalIgnoreCase);
+            _allSourcesEnabled = true;
+        }
+    }
+
+    private bool IsSourceEnabled(string source) =>
+        _allSourcesEnabled || _enabledSources.Contains(source);
+
+    private void ToggleSource(string source, bool enabled)
+    {
+        if (_allSourcesEnabled)
+        {
+            // Materialize the full set before removing the first one.
+            _enabledSources = new HashSet<string>(_allSources, StringComparer.OrdinalIgnoreCase);
+            _allSourcesEnabled = false;
+        }
+
+        if (enabled) _enabledSources.Add(source);
+        else _enabledSources.Remove(source);
+
+        bool everythingOn = _enabledSources.Count >= _allSources.Count;
+        IReadOnlySet<string>? toApply = everythingOn ? null : _enabledSources;
+
+        Preferences.SaveEnabledSources(toApply);
+        SessionService.EnabledSources = toApply;
+        _allSourcesEnabled = everythingOn;
+    }
+
+    private IReadOnlyList<PartManifestEntry> GetLayers() => Parts.GetLayers();
+
+    private PartSourceConfig? BuildConfig()
+    {
+        if (_kind == PartSourceKind.GitHub)
+        {
+            var parts = (_ownerRepo ?? "").Split('/', 2, StringSplitOptions.TrimEntries);
+            if (parts.Length != 2 || parts[0].Length == 0 || parts[1].Length == 0)
+            {
+                SetMessage("Enter the GitHub source as owner/repo.", isError: true);
+                return null;
+            }
+            return PartSourceConfig.GitHubRepo(parts[0], parts[1], _ref);
+        }
+        if (string.IsNullOrWhiteSpace(_hostUrl))
+        {
+            SetMessage("Enter the CBLoader host base URL.", isError: true);
+            return null;
+        }
+        return PartSourceConfig.CbloaderHost(_hostUrl);
+    }
+
+    private async Task CheckUpdatesAsync()
+    {
+        var config = BuildConfig();
+        if (config is null) return;
+        Preferences.SaveSourceConfig(config);
+
+        await RunAsync(async () =>
+        {
+            _report = await Parts.CheckForUpdatesAsync(config);
+            SetMessage(_report.HasUpdates ? "Updates available." : "Everything is up to date.", isError: false);
+        });
+    }
+
+    private async Task ApplyUpdatesAsync()
+    {
+        var config = BuildConfig();
+        if (config is null || _report is null) return;
+
+        var toInstall = _report.New.Concat(_report.Updated)
+            .Where(e => e.Remote is not null).Select(e => e.Remote!).ToList();
+
+        await RunAsync(async () =>
+        {
+            await Parts.ApplyUpdatesAsync(config, toInstall);
+            _report = await Parts.CheckForUpdatesAsync(config);
+            SetMessage($"Installed {toInstall.Count} part(s) and rebuilt the database.", isError: false);
+        });
+    }
+
+    private async Task TogglePartAsync(string partId, bool enabled)
+    {
+        await RunAsync(async () =>
+        {
+            await Parts.SetPartEnabledAsync(partId, enabled);
+            SetMessage($"{(enabled ? "Enabled" : "Disabled")} {partId} and rebuilt the database.", isError: false);
+        });
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        _message = null;
+        StateHasChanged();
+        try { await action(); }
+        catch (Exception ex) { SetMessage(ex.Message, isError: true); }
+        finally { _busy = false; StateHasChanged(); }
+    }
+
+    private void SetMessage(string message, bool isError)
+    {
+        _message = message;
+        _isError = isError;
+    }
+}
