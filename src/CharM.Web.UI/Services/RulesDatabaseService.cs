@@ -204,6 +204,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         string rulesXmlFileName,
         IEnumerable<UploadedRulesSourceFile> partFiles,
         string? partIndexUrl = null,
+        PartSourceConfig? partSource = null,
         CancellationToken cancellationToken = default)
     {
         var sourceDirectory = Path.Combine(_workingDirectory, "sources");
@@ -212,7 +213,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         var xmlPath = Path.Combine(sourceDirectory, MakeSafeFileName(rulesXmlFileName, "rules.xml"));
         await CopyToFileAsync(rulesXmlStream, xmlPath, cancellationToken);
 
-        await BuildFromXmlPathAsync(xmlPath, partFiles, partIndexUrl, cancellationToken);
+        await BuildFromXmlPathAsync(xmlPath, partFiles, partIndexUrl, partSource, cancellationToken);
     }
 
     /// <summary>
@@ -226,6 +227,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         string updateExecutableFileName,
         IEnumerable<UploadedRulesSourceFile> partFiles,
         string? partIndexUrl = null,
+        PartSourceConfig? partSource = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(updateExecutableStream);
@@ -247,7 +249,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
             try
             {
-                await BuildFromXmlPathAsync(extractedXmlPath, partFiles, partIndexUrl, cancellationToken);
+                await BuildFromXmlPathAsync(extractedXmlPath, partFiles, partIndexUrl, partSource, cancellationToken);
             }
             finally
             {
@@ -264,11 +266,18 @@ public sealed class RulesDatabaseService : IRulesDatabase
         string xmlPath,
         IEnumerable<UploadedRulesSourceFile> partFiles,
         string? partIndexUrl,
+        PartSourceConfig? partSource,
         CancellationToken cancellationToken)
     {
         var sourceDirectory = Path.Combine(_workingDirectory, "sources");
         var partsDirectory = Path.Combine(sourceDirectory, "parts");
         var dbPath = Path.Combine(_workingDirectory, "rules.db");
+
+        // Release any currently-loaded database first: we are about to overwrite
+        // the working rules.db on disk, so it must not be held open (a lingering
+        // read connection + its stale -wal corrupts the rebuilt file).
+        Unload();
+
         Directory.CreateDirectory(sourceDirectory);
         if (Directory.Exists(partsDirectory))
             Directory.Delete(partsDirectory, recursive: true);
@@ -283,7 +292,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
         try
         {
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
                 // Pull indexed parts (if any) into the same directory so they
                 // are archived and toggleable alongside uploaded parts.
@@ -308,6 +317,25 @@ public sealed class RulesDatabaseService : IRulesDatabase
                 store.Initialize(xmlPath, stagedParts, dbPath,
                     new Progress<string>(message =>
                         SetProgress(new DbBuildProgress("Building rules database", Detail: message.Trim()))));
+
+                // Pull parts directly from a configured remote source (e.g. a
+                // GitHub repo) and layer them on top of the freshly built base.
+                if (partSource is { IsComplete: true })
+                {
+                    var source = PartSourceFactory.Create(partSource);
+                    SetProgress(new DbBuildProgress("Listing parts", Detail: source.DisplayName));
+                    var remoteParts = await source.ListAsync(cancellationToken);
+                    if (remoteParts.Count > 0)
+                    {
+                        await store.InstallRemotePartsAsync(source, remoteParts, cancellationToken,
+                            new Progress<string>(message =>
+                                SetProgress(new DbBuildProgress("Downloading parts", Detail: message.Trim()))));
+                        SetProgress(new DbBuildProgress("Building rules database", Detail: "merging remote parts"));
+                        store.Rebuild(dbPath,
+                            new Progress<string>(message =>
+                                SetProgress(new DbBuildProgress("Building rules database", Detail: message.Trim()))));
+                    }
+                }
             }, cancellationToken);
         }
         finally
@@ -376,12 +404,26 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
     public int Count => Current.Count;
 
-    public void Dispose()
+    /// <summary>
+    /// Fully release the currently-loaded database: dispose the read connection
+    /// (which, with pooling disabled, releases the OS file handle plus the
+    /// WAL/SHM sidecars) and reset all derived metadata. After this returns the
+    /// working <c>rules.db</c> file is no longer held open, so it is safe to
+    /// overwrite/rebuild. Safe to call when nothing is loaded.
+    ///
+    /// This is the single shared "close cleanly" path — reused by
+    /// <see cref="Dispose"/> and by every flow that rebuilds the working
+    /// database in place (initial build, part toggle, remote update) so none of
+    /// them overwrite a file we are still holding open.
+    /// </summary>
+    public void Unload()
     {
         RulesDatabase? old;
+        bool wasLoaded;
         lock (_sync)
         {
             old = _current;
+            wasLoaded = old is not null;
             _current = null;
             _databasePath = null;
             ContentHash = null;
@@ -391,7 +433,16 @@ public sealed class RulesDatabaseService : IRulesDatabase
         }
 
         old?.Dispose();
+        // Belt-and-suspenders: drop any pooled handle that some other code path
+        // may have opened against the file, so the rebuild's delete/overwrite of
+        // rules.db (and its -wal/-shm) can't race a lingering connection.
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        if (wasLoaded)
+            Changed?.Invoke();
     }
+
+    public void Dispose() => Unload();
 
     private IRulesDatabase Current
     {

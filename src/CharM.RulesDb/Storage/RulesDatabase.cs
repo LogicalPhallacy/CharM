@@ -90,7 +90,12 @@ public sealed class RulesDatabase : IRulesDatabase
     /// </summary>
     public RulesDatabase(string dbPath)
     {
-        _connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+        // Pooling=False so disposing this connection actually releases the OS
+        // file handle (and the WAL/SHM sidecars) immediately. With the default
+        // pooling on, Dispose() returns the connection to the pool and keeps the
+        // file open, which corrupts the database when the working rules.db is
+        // later overwritten by a rebuild ("database disk image is malformed").
+        _connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False");
         _connection.Open();
     }
 

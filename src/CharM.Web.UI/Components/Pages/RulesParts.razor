@@ -41,7 +41,7 @@
                 {
                     <label class="text-sm text-on-surface flex flex-col gap-1 md:col-span-2">
                         <span class="text-xs uppercase tracking-wider text-on-surface-variant">owner/repo</span>
-                        <input @bind="_ownerRepo" placeholder="LogicalPhallacy/cbparts"
+                        <input @bind="_ownerRepo" placeholder="owner/repo"
                                class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
                     </label>
                     <label class="text-sm text-on-surface flex flex-col gap-1">
@@ -79,35 +79,98 @@
                     @_report.New.Count() new, @_report.Updated.Count() updated,
                     @_report.MissingRemotely.Count() missing remotely.
                 </p>
+
+                @if (_report.Updated.Any() || _report.New.Any() || _report.MissingRemotely.Any())
+                {
+                    <div class="mt-2 max-h-60 overflow-y-auto pr-2 space-y-3 text-sm">
+                        @if (_report.Updated.Any())
+                        {
+                            <div>
+                                <h4 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">Updated (@_report.Updated.Count())</h4>
+                                <ul class="space-y-0.5">
+                                    @foreach (var e in _report.Updated)
+                                    {
+                                        <li class="flex items-baseline justify-between gap-3">
+                                            <span class="text-on-surface truncate">@e.PartId</span>
+                                            <span class="text-xs text-on-surface-variant shrink-0 font-mono">@FormatVersion(e.InstalledVersion) → @FormatVersion(e.RemoteVersion)</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                        @if (_report.New.Any())
+                        {
+                            <div>
+                                <h4 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">New (@_report.New.Count())</h4>
+                                <ul class="space-y-0.5">
+                                    @foreach (var e in _report.New)
+                                    {
+                                        <li class="flex items-baseline justify-between gap-3">
+                                            <span class="text-on-surface truncate">@e.PartId</span>
+                                            <span class="text-xs text-on-surface-variant shrink-0 font-mono">@FormatVersion(e.RemoteVersion)</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                        @if (_report.MissingRemotely.Any())
+                        {
+                            <div>
+                                <h4 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">Missing remotely (@_report.MissingRemotely.Count())</h4>
+                                <ul class="space-y-0.5">
+                                    @foreach (var e in _report.MissingRemotely)
+                                    {
+                                        <li class="flex items-baseline justify-between gap-3">
+                                            <span class="text-on-surface truncate">@e.PartId</span>
+                                            <span class="text-xs text-on-surface-variant shrink-0 font-mono">@FormatVersion(e.InstalledVersion)</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                    </div>
+                }
             }
         </section>
 
         <!-- ============ Installed part layers ============ -->
         <section class="p-5 bg-surface-container-low rounded ghost-border">
-            <h2 class="font-headline text-xl font-bold text-on-surface mb-3">Installed parts</h2>
-            @foreach (var group in GetLayers().GroupBy(p => p.Category ?? "uncategorized"))
-            {
-                <h3 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mt-4 mb-1">@group.Key</h3>
-                <ul class="divide-y divide-outline/30">
-                    @foreach (var part in group)
-                    {
-                        <li class="flex items-center justify-between py-2">
-                            <div>
-                                <span class="text-sm text-on-surface">@part.Filename</span>
-                                @if (part.Version is not null)
-                                {
-                                    <span class="text-xs text-on-surface-variant ml-2">v@part.Version</span>
-                                }
-                            </div>
-                            <label class="inline-flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked="@part.Enabled" disabled="@_busy"
-                                       @onchange="@(e => TogglePartAsync(part.PartId, (bool)e.Value!))" />
-                                <span class="text-xs text-on-surface-variant">@(part.Enabled ? "enabled" : "disabled")</span>
-                            </label>
-                        </li>
-                    }
-                </ul>
-            }
+            <h2 class="font-headline text-xl font-bold text-on-surface mb-1">Installed parts</h2>
+            <p class="text-xs text-on-surface-variant mb-3">
+                Toggle individual parts, or enable/disable a whole folder with its header checkbox.
+            </p>
+            <div class="max-h-96 overflow-y-auto pr-2">
+                @foreach (var group in GetLayers().GroupBy(p => p.Category ?? "uncategorized"))
+                {
+                    var parts = group.ToList();
+                    var enabledCount = parts.Count(p => p.Enabled);
+                    var allEnabled = enabledCount == parts.Count;
+                    <div class="mt-4 first:mt-0">
+                        <label class="flex items-center gap-2 cursor-pointer mb-1 pb-1 border-b border-outline/40">
+                            <input type="checkbox" checked="@allEnabled" disabled="@_busy"
+                                   @onchange="@(e => ToggleCategoryAsync(parts, (bool)e.Value!))" />
+                            <span class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant">@group.Key</span>
+                            <span class="text-xs text-on-surface-variant">(@enabledCount/@parts.Count)</span>
+                        </label>
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8">
+                            @foreach (var part in parts)
+                            {
+                                <label class="flex items-center justify-between gap-2 py-1.5 border-b border-outline/20 cursor-pointer">
+                                    <span class="flex items-baseline gap-2 min-w-0">
+                                        <span class="text-sm text-on-surface truncate">@part.Filename</span>
+                                        @if (!string.IsNullOrWhiteSpace(part.Version))
+                                        {
+                                            <span class="text-xs text-on-surface-variant shrink-0">v@(part.Version)</span>
+                                        }
+                                    </span>
+                                    <input type="checkbox" class="shrink-0" checked="@part.Enabled" disabled="@_busy"
+                                           @onchange="@(e => TogglePartAsync(part.PartId, (bool)e.Value!))" />
+                                </label>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
         </section>
     }
 
@@ -216,6 +279,10 @@
 
     private IReadOnlyList<PartManifestEntry> GetLayers() => Parts.GetLayers();
 
+    /// <summary>Display a part version, or a placeholder when the source doesn't expose one (e.g. GitHub).</summary>
+    private static string FormatVersion(string? version) =>
+        string.IsNullOrWhiteSpace(version) ? "—" : $"v{version}";
+
     private PartSourceConfig? BuildConfig()
     {
         if (_kind == PartSourceKind.GitHub)
@@ -271,6 +338,16 @@
         {
             await Parts.SetPartEnabledAsync(partId, enabled);
             SetMessage($"{(enabled ? "Enabled" : "Disabled")} {partId} and rebuilt the database.", isError: false);
+        });
+    }
+
+    private async Task ToggleCategoryAsync(IReadOnlyList<PartManifestEntry> parts, bool enabled)
+    {
+        var ids = parts.Select(p => p.PartId).ToList();
+        await RunAsync(async () =>
+        {
+            await Parts.SetPartsEnabledAsync(ids, enabled);
+            SetMessage($"{(enabled ? "Enabled" : "Disabled")} {ids.Count} part(s) and rebuilt the database.", isError: false);
         });
     }
 

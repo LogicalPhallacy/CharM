@@ -42,8 +42,21 @@ public sealed class PartManagementService
     /// <summary>
     /// Enable or disable a part and rebuild the working database, then reload it.
     /// </summary>
-    public async Task SetPartEnabledAsync(string partId, bool enabled, CancellationToken cancellationToken = default)
+    public Task SetPartEnabledAsync(string partId, bool enabled, CancellationToken cancellationToken = default)
+        => SetPartsEnabledAsync([partId], enabled, cancellationToken);
+
+    /// <summary>
+    /// Enable or disable many parts at once (e.g. a whole category), rebuilding
+    /// the working database a single time, then reload it. Shared by the
+    /// single-part toggle so both paths rebuild identically.
+    /// </summary>
+    public async Task SetPartsEnabledAsync(
+        IReadOnlyCollection<string> partIds, bool enabled, CancellationToken cancellationToken = default)
     {
+        if (partIds.Count == 0) return;
+
+        // Release the loaded DB before rebuilding it in place (see Unload).
+        _db.Unload();
         await Task.Run(() =>
         {
             lock (_sync)
@@ -51,7 +64,7 @@ public sealed class PartManagementService
                 var store = new RulesDbLayerStore(_workingDirectory);
                 if (!store.IsInitialized)
                     throw new InvalidOperationException("This database was not built through the layered pipeline; rebuild it to manage parts.");
-                store.SetEnabled(partId, enabled);
+                store.SetEnabled(partIds, enabled);
                 store.Rebuild(WorkingDbPath);
             }
         }, cancellationToken);
@@ -84,6 +97,8 @@ public sealed class PartManagementService
         if (!store.IsInitialized)
             throw new InvalidOperationException("No layered store to update.");
 
+        // Release the loaded DB before rebuilding it in place (see Unload).
+        _db.Unload();
         await store.InstallRemotePartsAsync(source, parts, cancellationToken);
         await Task.Run(() => { lock (_sync) store.Rebuild(WorkingDbPath); }, cancellationToken);
         ReloadDatabase();

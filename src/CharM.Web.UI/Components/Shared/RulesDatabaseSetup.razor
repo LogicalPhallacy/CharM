@@ -1,6 +1,8 @@
 @using Microsoft.AspNetCore.Components.Forms
+@using CharM.RulesDb.Import
 @using CharM.Web.Services
 @inject RulesDatabaseService RulesDatabase
+@inject PartPreferencesStore PartPreferences
 @inject NavigationManager Navigation
 @implements IDisposable
 
@@ -67,6 +69,7 @@
                             <li><strong>OCB update executable</strong> — the official Wizards of the Coast "Character Builder Update" installer (extension <code>.exe</code>). CharM extracts the rules XML from it automatically.</li>
                         }
                         <li><strong>Part files or an Index</strong> (<code>.part</code>, <code>.index</code>) — incremental rule updates produced by CBLoader. Optional but highly recommended.</li>
+                        <li><strong>GitHub parts repo</strong> — a repository of <code>.part</code> overlays in <code>owner/repo</code> form. CharM pulls them directly. Optional.</li>
                     </ul>
                 </details>
 
@@ -109,9 +112,24 @@
                 <!-- Optional addons -->
                 <details class="text-sm text-on-surface mb-3">
                     <summary class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface">
-                        + Optional: part files & index URL
+                        + Optional: part files, GitHub repo & index URL
                     </summary>
                     <div class="mt-3 space-y-3">
+                        <div>
+                            <label class="block text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">GitHub parts repo</label>
+                            <input type="text" @bind="_partsGitHubRepo"
+                                   class="w-full px-3 py-2 bg-surface-container-lowest border-b border-outline rounded text-on-surface font-body focus:border-primary focus:outline-none"
+                                   placeholder="owner/repo" />
+                            <p class="text-xs text-on-surface-variant mt-1">
+                                Short <code>owner/repo</code> form. Parts are pulled from the repo and layered on the base rules.
+                            </p>
+                            <div class="mt-2">
+                                <label class="block text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">ref (branch / tag, optional)</label>
+                                <input type="text" @bind="_partsGitHubRef"
+                                       class="w-full px-3 py-2 bg-surface-container-lowest border-b border-outline rounded text-on-surface font-body focus:border-primary focus:outline-none"
+                                       placeholder="master" />
+                            </div>
+                        </div>
                         <div>
                             <label class="block text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">Part files</label>
                             <InputFile OnChange="OnPartsSelected" multiple class="block w-full text-sm text-on-surface" />
@@ -200,6 +218,8 @@
     private IBrowserFile? _selectedUpdateExecutable;
     private IReadOnlyList<IBrowserFile> _selectedParts = [];
     private string? _partIndexUrl;
+    private string? _partsGitHubRepo;
+    private string? _partsGitHubRef;
     private SourceMode _sourceMode = SourceMode.RulesXml;
     private bool _busy;
     private string? _message;
@@ -232,6 +252,16 @@
     {
         if (!ExeExtractionSupported && _sourceMode == SourceMode.UpdateExecutable)
             _sourceMode = SourceMode.RulesXml;
+
+        // Pre-fill the GitHub parts repo from a previously saved source config.
+        var savedSource = PartPreferences.LoadSourceConfig();
+        if (savedSource is { Kind: PartSourceKind.GitHub }
+            && !string.IsNullOrWhiteSpace(savedSource.Owner)
+            && !string.IsNullOrWhiteSpace(savedSource.Repo))
+        {
+            _partsGitHubRepo = $"{savedSource.Owner}/{savedSource.Repo}";
+            _partsGitHubRef = savedSource.Ref;
+        }
 
         RulesDatabase.Changed += HandleRulesDatabaseChanged;
     }
@@ -291,6 +321,13 @@
         if (!HasRulesSource)
             return;
 
+        if (!TryBuildPartSourceConfig(out var partSource))
+        {
+            _message = "Enter the GitHub parts repo as owner/repo.";
+            _messageIsError = true;
+            return;
+        }
+
         await RunSetupActionAsync(async () =>
         {
             var parts = _selectedParts.Select(file =>
@@ -299,17 +336,42 @@
             if (_sourceMode == SourceMode.RulesXml && _selectedRulesXml is not null)
             {
                 await using var rulesStream = _selectedRulesXml.OpenReadStream(RulesDatabaseService.MaxUploadBytes);
-                await RulesDatabase.BuildFromUploadedSourcesAsync(rulesStream, _selectedRulesXml.Name, parts, _partIndexUrl);
+                await RulesDatabase.BuildFromUploadedSourcesAsync(rulesStream, _selectedRulesXml.Name, parts, _partIndexUrl, partSource);
             }
             else if (_sourceMode == SourceMode.UpdateExecutable && _selectedUpdateExecutable is not null)
             {
                 await using var exeStream = _selectedUpdateExecutable.OpenReadStream(RulesDatabaseService.MaxUploadBytes);
-                await RulesDatabase.BuildFromUpdateExecutableAsync(exeStream, _selectedUpdateExecutable.Name, parts, _partIndexUrl);
+                await RulesDatabase.BuildFromUpdateExecutableAsync(exeStream, _selectedUpdateExecutable.Name, parts, _partIndexUrl, partSource);
             }
+
+            // Persist the chosen GitHub source so the Rules Parts page can check
+            // for updates against it later without re-entering the repo.
+            if (partSource is not null)
+                PartPreferences.SaveSourceConfig(partSource);
 
             _message = "Built and loaded rules.db";
             _messageIsError = false;
         });
+    }
+
+    /// <summary>
+    /// Parses the optional GitHub parts repo field into a <see cref="PartSourceConfig"/>.
+    /// Returns false only when a non-empty value is present but malformed.
+    /// </summary>
+    private bool TryBuildPartSourceConfig(out PartSourceConfig? config)
+    {
+        config = null;
+        var raw = _partsGitHubRepo?.Trim();
+        if (string.IsNullOrEmpty(raw))
+            return true;
+
+        var segments = raw.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 2)
+            return false;
+
+        var @ref = string.IsNullOrWhiteSpace(_partsGitHubRef) ? "master" : _partsGitHubRef.Trim();
+        config = PartSourceConfig.GitHubRepo(segments[0], segments[1], @ref);
+        return true;
     }
 
     private async Task RunSetupActionAsync(Func<Task> action)

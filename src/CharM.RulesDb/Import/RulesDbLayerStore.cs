@@ -147,6 +147,24 @@ public sealed class RulesDbLayerStore
     }
 
     /// <summary>
+    /// Flip the enabled flag on many parts at once (does not rebuild). Unknown
+    /// ids are ignored. Use this for category-level toggles so the manifest is
+    /// written once and the working DB is rebuilt only once afterwards.
+    /// </summary>
+    public PartManifest SetEnabled(IEnumerable<string> partIds, bool enabled)
+    {
+        var ids = new HashSet<string>(partIds, StringComparer.OrdinalIgnoreCase);
+        var manifest = LoadManifest();
+        foreach (var entry in manifest.Parts)
+        {
+            if (ids.Contains(entry.PartId))
+                entry.Enabled = enabled;
+        }
+        SaveManifest(manifest);
+        return manifest;
+    }
+
+    /// <summary>
     /// Download and install (or update) parts from a remote source: writes the
     /// bytes into the archive, records the source fingerprint + version for
     /// later update detection, and adds/updates the manifest entry. Does NOT
@@ -157,15 +175,20 @@ public sealed class RulesDbLayerStore
     public async Task<IReadOnlyList<string>> InstallRemotePartsAsync(
         IPartSource source,
         IEnumerable<RemotePartInfo> parts,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<string>? progress = null)
     {
         Directory.CreateDirectory(_archiveDir);
         var manifest = LoadManifest();
         int nextOrder = manifest.Parts.Count > 0 ? manifest.Parts.Max(p => p.LayerOrder) + 1 : 1;
         var changed = new List<string>();
 
-        foreach (var remote in parts)
+        var partList = parts as IReadOnlyList<RemotePartInfo> ?? parts.ToList();
+        int total = partList.Count;
+        int index = 0;
+        foreach (var remote in partList)
         {
+            progress?.Report($"Downloading {remote.PartId} ({++index}/{total})");
             byte[] bytes = await source.DownloadAsync(remote, cancellationToken);
             var info = PartMetadataReader.Read(bytes, remote.Filename, remote.PartId, remote.Category);
             if (info.IsObsolete) continue;
