@@ -3,8 +3,10 @@
 @using CharM.Engine.CharacterModel
 @using CharM.Engine.Economy
 @using CharM.Engine.Rules
+@using CharM.RulesDb.Storage
 @using CharM.Web.Services
 @inject CharacterSessionService SessionService
+@inject RulesDatabaseService RulesDatabase
 @inject CharacterRestoreState RestoreState
 @implements IDisposable
 
@@ -43,6 +45,9 @@ else
     var session = SessionService.Session!;
     var pendingChoices = session.GetAllPendingChoices();
     var snapshot = session.GetPartialSnapshot();
+
+    // Skill/ability vocabulary derived from the loaded ruleset (cached).
+    var vocab = RulesDatabase.Vocabulary;
 
     var displayPendingChoices = OrderPendingChoices(pendingChoices).ToList();
 
@@ -200,7 +205,7 @@ else
                         int mod = (score - 10) / 2;
                         string modStr = mod >= 0 ? $"+{mod}" : $"{mod}";
                         bool isPrimary = mod >= 3;
-                        var linkedSkills = _abilityToSkills[abilityName];
+                        var linkedSkills = vocab.SkillsByAbility[abilityName];
 
                         <div class="bg-surface-container-lowest ghost-border p-2 flex items-center gap-3">
                             <div class="flex items-center gap-2 shrink-0">
@@ -250,7 +255,7 @@ else
                             <h2 class="font-label text-[10px] font-bold uppercase tracking-[0.2em] text-outline">Skills</h2>
                         </div>
                         <div class="p-2 space-y-0.5">
-                            @foreach (var skill in _allSkillsAlphabetical)
+                            @foreach (var skill in vocab.SkillNames)
                             {
                                 int skillVal = snapshot?.GetStat(skill) ?? 0;
                                 bool trained = snapshot is not null && snapshot.GetStat(skill + " Trained") > 0;
@@ -459,8 +464,9 @@ else
                     <div class="col-span-2 lg:col-span-3 pt-4 border-t border-outline-variant/20">
                         <div class="flex gap-4">
                             <div class="grid grid-cols-2 gap-3 shrink-0">
-                                @foreach (var (statName, label, cssClass) in new[] { ("AC", "AC", "defense-ac"), ("Fortitude Defense", "FORT", "defense-fort"), ("Reflex Defense", "REFL", "defense-refl"), ("Will Defense", "WILL", "defense-will") })
+                                @foreach (var (statName, label) in CharacterStatNames.Defenses)
                                 {
+                                    var cssClass = "defense-" + label.ToLowerInvariant();
                                     int val = snapshot?.GetStat(statName) ?? 10;
                                     <div class="relative w-16 h-16 flex flex-col items-center justify-center">
                                         <div class="absolute inset-0 @cssClass"></div>
@@ -474,7 +480,7 @@ else
                                 }
                             </div>
                             <div class="flex-grow space-y-2 py-0.5">
-                                @foreach (var (statName, label) in new[] { ("Initiative", "Initiative"), ("Speed", "Speed"), ("Passive Insight", "Passive Insight"), ("Passive Perception", "Passive Perception") })
+                                @foreach (var (statName, label) in CharacterStatNames.Derived)
                                 {
                                     int val = snapshot?.GetStat(statName) ?? 0;
                                     <div class="flex justify-between items-center text-[10px] px-3 py-1.5 bg-surface-container-low border border-outline-variant/10">
@@ -605,7 +611,7 @@ else
                                         @onblur="() => _editingAlignment = false"
                                         class="text-xs font-bold px-2 py-0.5 bg-surface-container-low border border-outline-variant/20 focus:border-primary focus:outline-none"
                                         autofocus>
-                                    @foreach (var a in _alignments)
+                                    @foreach (var a in vocab.Alignments)
                                     {
                                         <option value="@a" selected="@(a == session.Details.GetValueOrDefault("Alignment", "Unaligned"))">@a</option>
                                     }
@@ -1335,7 +1341,6 @@ else
 
     // Alignment editing
     private bool _editingAlignment;
-    private static readonly string[] _alignments = ["Lawful Good", "Good", "Unaligned", "Evil", "Chaotic Evil"];
 
     // Equipment browser state
     private bool _showEquipmentModal;
@@ -1352,36 +1357,10 @@ else
     private bool _equipOnlyProficient;
     private string _equipSortMode = "level";
 
-    private static readonly string[] _equipSlots =
-        ["Main Hand", "Off-Hand", "Chest", "Head", "Neck", "Arms", "Hands", "Waist", "Feet", "Ring 1", "Ring 2"];
+    private static readonly IReadOnlyList<string> _equipSlots = EquipmentSlots.DisplayOrder;
 
     private static readonly (string Name, Ability Key)[] _abilityDefs =
-    [
-        ("Strength", Ability.Strength),
-        ("Constitution", Ability.Constitution),
-        ("Dexterity", Ability.Dexterity),
-        ("Intelligence", Ability.Intelligence),
-        ("Wisdom", Ability.Wisdom),
-        ("Charisma", Ability.Charisma),
-    ];
-
-    private static readonly Dictionary<string, string[]> _abilityToSkills = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Strength"] = ["Athletics"],
-        ["Constitution"] = ["Endurance"],
-        ["Dexterity"] = ["Acrobatics", "Stealth", "Thievery"],
-        ["Intelligence"] = ["Arcana", "History", "Religion"],
-        ["Wisdom"] = ["Dungeoneering", "Heal", "Insight", "Nature", "Perception"],
-        ["Charisma"] = ["Bluff", "Diplomacy", "Intimidate", "Streetwise"],
-    };
-
-    private static readonly string[] _allSkillsAlphabetical =
-    [
-        "Acrobatics", "Arcana", "Athletics", "Bluff", "Diplomacy",
-        "Dungeoneering", "Endurance", "Heal", "History", "Insight",
-        "Intimidate", "Nature", "Perception", "Religion", "Stealth",
-        "Streetwise", "Thievery",
-    ];
+        AbilityNames.StandardOrder.Select(a => (AbilityNames.GetFullName(a), a)).ToArray();
 
     protected override void OnInitialized()
     {

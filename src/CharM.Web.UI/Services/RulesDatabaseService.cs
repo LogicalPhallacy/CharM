@@ -84,6 +84,37 @@ public sealed class RulesDatabaseService : IRulesDatabase
     /// <summary>UTC timestamp when the current database was loaded by this service.</summary>
     public DateTime? LoadedAt { get; private set; }
 
+    private RulesVocabulary? _vocabulary;
+
+    /// <summary>
+    /// Game vocabulary (skills + key abilities, ...) projected from the loaded
+    /// rules database and cached until the database is swapped/rebuilt. Lets the
+    /// UI consume the actual loaded ruleset instead of hardcoded lists.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No database is loaded.</exception>
+    public RulesVocabulary Vocabulary
+    {
+        get
+        {
+            var cached = _vocabulary;
+            if (cached is not null)
+                return cached;
+
+            IRulesDatabase db;
+            lock (_sync)
+                db = _current ?? throw new InvalidOperationException("Load a rules database before using the vocabulary.");
+
+            var built = RulesVocabulary.Build(db);
+            lock (_sync)
+            {
+                // Only cache if the database hasn't been swapped while building.
+                if (ReferenceEquals(_current, db))
+                    _vocabulary = built;
+            }
+            return built;
+        }
+    }
+
     public string? StatusMessage { get; private set; }
     public bool StatusIsError { get; private set; }
 
@@ -445,6 +476,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
             ContentHashComputing = false;
             SizeBytes = null;
             LoadedAt = null;
+            _vocabulary = null;
             // Stop any in-flight hash so it releases its read handle.
             _hashCts?.Cancel();
         }
@@ -632,6 +664,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
             ContentHashComputing = true;
             SizeBytes = size;
             LoadedAt = DateTime.UtcNow;
+            _vocabulary = null; // re-derive against the new database on next access
 
             // Cancel any prior (now-stale) hash and start a fresh cancellable one.
             _hashCts?.Cancel();

@@ -148,6 +148,45 @@ public sealed class CharacterSessionService : IDisposable
     }
 
     /// <summary>
+    /// Serialize the current app-created session to lossless replay JSON for the
+    /// autosave slot, or return null when there is no session or the session is
+    /// an imported one (those persist as .dnd4e — see
+    /// <see cref="CharacterSession.IsReplayPersistable"/>). The JSON always
+    /// starts with '{', which the restore path uses to distinguish it from the
+    /// base64 .dnd4e legacy/imported format.
+    /// </summary>
+    public string? SerializeReplayStateOrNull()
+    {
+        if (_session is null || !_session.IsReplayPersistable)
+            return null;
+        var dto = _session.ToReplayState();
+        return System.Text.Json.JsonSerializer.Serialize(
+            dto, CharM.Engine.Creation.Persistence.CharacterSessionStateJsonContext.Default.CharacterSessionStateDto);
+    }
+
+    /// <summary>
+    /// Restore a session from replay JSON (produced by
+    /// <see cref="SerializeReplayStateOrNull"/>) and make it active. Rebuilds the
+    /// wizard tree so pending choices are regenerated.
+    /// </summary>
+    public CharacterSession RestoreFromReplayJson(string json)
+    {
+        var dto = System.Text.Json.JsonSerializer.Deserialize(
+            json, CharM.Engine.Creation.Persistence.CharacterSessionStateJsonContext.Default.CharacterSessionStateDto)
+            ?? throw new InvalidOperationException("Could not parse saved character state.");
+
+        var session = CharacterSession.RestoreFromReplayState(
+            dto,
+            _db.FindByInternalId,
+            _db.FindByNameAndType,
+            (type, includeRules) => _db.FindByType(type, includeRules),
+            (type, source, includeRules) => _db.FindByTypeAndSource(type, source, includeRules));
+
+        SetSession(session);
+        return _session!;
+    }
+
+    /// <summary>
     /// Render the current character as OCB SummaryText (forum-shareable).
     /// </summary>
     public string? ExportToSummaryText()

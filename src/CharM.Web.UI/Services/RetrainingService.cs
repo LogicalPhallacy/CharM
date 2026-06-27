@@ -388,7 +388,7 @@ public sealed class RetrainingService
             return false;
         if (!element.Fields.TryGetValue("Power Usage", out var usage))
             return false;
-        return usage.Contains("Utility", StringComparison.OrdinalIgnoreCase);
+        return usage.Contains(CharM.Web.Components.Shared.PowerSectionKeys.Utility, StringComparison.OrdinalIgnoreCase);
     }
 
     private static int? PowerLevel(RulesElement power)

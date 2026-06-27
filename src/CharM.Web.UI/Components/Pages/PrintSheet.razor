@@ -7,6 +7,7 @@
 @using CharM.Web.Components.Shared
 @using CharM.Web.Services
 @inject CharacterSessionService SessionService
+@inject RulesDatabaseService RulesDatabase
 @inject CharacterRestoreState RestoreState
 @inject PrintCardCollector Collector
 @inject IJSRuntime JS
@@ -744,6 +745,7 @@
 else
 {
     var snapshot = session.GetPartialSnapshot();
+    var vocab = RulesDatabase.Vocabulary;
     var collection = Collector.Collect();
     var cards = collection.AllNonCompanion;
 
@@ -825,7 +827,7 @@ else
                     {
                         int score = snapshot?.GetStat(abilityName) ?? 10;
                         int mod = (score - 10) / 2 + (session.Level / 2);
-                        var linked = _abilityToSkills[abilityName];
+                        var linked = vocab.SkillsByAbility[abilityName];
 
                         <div class="as-row">
                             <div class="as-ability">
@@ -836,7 +838,7 @@ else
                             @if (!SeparateSkillsBlock)
                             {
                                 <div class="as-skills">
-                                    @if (linked.Length == 0)
+                                    @if (linked.Count == 0)
                                     {
                                         <div class="as-skill no-skills">—</div>
                                     }
@@ -865,7 +867,7 @@ else
                             Skills
                         </div>
                         <div>
-                            @foreach (var skill in _allSkillsAlphabetical)
+                            @foreach (var skill in vocab.SkillNames)
                             {
                                 int skillVal = snapshot?.GetStat(skill) ?? 0;
                                 bool trained = IsTrained(snapshot, skill);
@@ -917,7 +919,7 @@ else
                     <div class="panel">
                         <div class="panel-title">Defenses</div>
                         <div class="defense-grid">
-                            @foreach (var (statName, label) in new[] { ("AC", "AC"), ("Fortitude Defense", "FORT"), ("Reflex Defense", "REFL"), ("Will Defense", "WILL") })
+                            @foreach (var (statName, label) in CharacterStatNames.Defenses)
                             {
                                 int val = snapshot?.GetStat(statName) ?? 10;
                                 <div class="defense-box">
@@ -927,12 +929,7 @@ else
                             }
                         </div>
 
-                        @foreach (var (statName, label) in new[] {
-                            ("Initiative", "Initiative"),
-                            ("Speed", "Speed"),
-                            ("Passive Insight", "Passive Insight"),
-                            ("Passive Perception", "Passive Perception")
-                        })
+                        @foreach (var (statName, label) in CharacterStatNames.Derived)
                         {
                             int val = snapshot?.GetStat(statName) ?? 0;
                             <div class="tac-row">
@@ -1421,34 +1418,7 @@ else
     [CascadingParameter(Name = "SeparateSkillsBlock")] public bool SeparateSkillsBlock { get; set; }
 
     private static readonly (string Name, Ability Ability)[] _abilities =
-    [
-        ("Strength", Ability.Strength),
-        ("Constitution", Ability.Constitution),
-        ("Dexterity", Ability.Dexterity),
-        ("Intelligence", Ability.Intelligence),
-        ("Wisdom", Ability.Wisdom),
-        ("Charisma", Ability.Charisma),
-    ];
-
-    // (Skill name, ability) — order matches the Essentials sheet's
-    // ability-grouped layout, which the web UI also follows.
-    private static readonly Dictionary<string, string[]> _abilityToSkills = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Strength"] = ["Athletics"],
-        ["Constitution"] = ["Endurance"],
-        ["Dexterity"] = ["Acrobatics", "Stealth", "Thievery"],
-        ["Intelligence"] = ["Arcana", "History", "Religion"],
-        ["Wisdom"] = ["Dungeoneering", "Heal", "Insight", "Nature", "Perception"],
-        ["Charisma"] = ["Bluff", "Diplomacy", "Intimidate", "Streetwise"],
-    };
-
-    private static readonly string[] _allSkillsAlphabetical =
-    [
-        "Acrobatics", "Arcana", "Athletics", "Bluff", "Diplomacy",
-        "Dungeoneering", "Endurance", "Heal", "History", "Insight",
-        "Intimidate", "Nature", "Perception", "Religion", "Stealth",
-        "Streetwise", "Thievery",
-    ];
+        AbilityNames.StandardOrder.Select(a => (AbilityNames.GetFullName(a), a)).ToArray();
 
     protected override void OnInitialized()
     {
