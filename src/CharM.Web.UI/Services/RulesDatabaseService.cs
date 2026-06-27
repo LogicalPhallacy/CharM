@@ -20,6 +20,19 @@ public sealed class RulesDatabaseService : IRulesDatabase
     private RulesDatabase? _current;
     private string? _databasePath;
 
+    // Signalled (set) when NOT rebuilding. During an in-place rebuild it is
+    // reset: the working rules.db is briefly closed and re-materialized, but the
+    // DB is logically still loaded. Query access waits on this instead of
+    // throwing, and IsLoaded stays true so the UI doesn't bounce to the setup
+    // wizard.
+    private readonly ManualResetEventSlim _notRebuilding = new(initialState: true);
+
+    // Cancels the in-flight background content-hash computation. The hash holds
+    // a read connection on the working DB for a couple of seconds; a fast
+    // rebuild must cancel it (the result is stale anyway) before swapping the
+    // file, or the open handle blocks the replace.
+    private CancellationTokenSource? _hashCts;
+
     public event Action? Changed;
 
     public RulesDatabaseService()
@@ -38,7 +51,9 @@ public sealed class RulesDatabaseService : IRulesDatabase
         get
         {
             lock (_sync)
-                return _current is not null;
+                // During an in-place rebuild _current is transiently null but the
+                // DB is still loaded — report true so the wizard doesn't appear.
+                return _current is not null || !_notRebuilding.IsSet;
         }
     }
 
@@ -430,6 +445,8 @@ public sealed class RulesDatabaseService : IRulesDatabase
             ContentHashComputing = false;
             SizeBytes = null;
             LoadedAt = null;
+            // Stop any in-flight hash so it releases its read handle.
+            _hashCts?.Cancel();
         }
 
         old?.Dispose();
@@ -442,12 +459,145 @@ public sealed class RulesDatabaseService : IRulesDatabase
             Changed?.Invoke();
     }
 
-    public void Dispose() => Unload();
+    public void Dispose()
+    {
+        Unload();
+        _notRebuilding.Dispose();
+        lock (_sync)
+        {
+            _hashCts?.Dispose();
+            _hashCts = null;
+        }
+    }
+
+    /// <summary>
+    /// Rebuild the working database without taking it offline. The new database
+    /// is materialized into a temp file by <paramref name="rebuildToTempPath"/>
+    /// while the current connection keeps serving reads (no UI lockup), then the
+    /// files are swapped and reopened in a brief gated window. <see cref="IsLoaded"/>
+    /// stays true throughout and progress is published via <see cref="CurrentProgress"/>.
+    /// Shared by every in-place part operation (toggle, category toggle, update).
+    /// </summary>
+    /// <param name="dbPath">The live working database path.</param>
+    /// <param name="rebuildToTempPath">
+    /// Materializes a fresh, self-contained database at the temp path it is given,
+    /// WITHOUT touching <paramref name="dbPath"/>. Receives a progress sink.
+    /// </param>
+    public async Task RebuildInPlaceAsync(string dbPath, Func<string, IProgress<string>, Task> rebuildToTempPath)
+    {
+        ArgumentNullException.ThrowIfNull(rebuildToTempPath);
+        var tempPath = dbPath + ".rebuild";
+
+        SetProgress(new DbBuildProgress("Rebuilding rules database"));
+        var progress = new Progress<string>(message =>
+            SetProgress(new DbBuildProgress("Rebuilding rules database", Detail: message.Trim())));
+
+        try
+        {
+            // Slow phase: build into a temp file. The live DB stays open and
+            // serving reads the whole time, so nothing blocks or bounces to the
+            // setup wizard.
+            await rebuildToTempPath(tempPath, progress);
+
+            // Fold the new DB's WAL into a single self-contained file pre-swap.
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            CheckpointWal(tempPath);
+
+            // Fast phase: gate readers only for the millisecond file swap.
+            SetProgress(new DbBuildProgress("Activating rebuilt database"));
+            RulesDatabase? old;
+            lock (_sync)
+            {
+                _notRebuilding.Reset();
+                old = _current;
+                _current = null;
+            }
+            old?.Dispose();
+            // Stop the (now-stale) background hash so it releases its read
+            // handle on the working DB before we replace the file.
+            CancelBackgroundHash();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try
+            {
+                SwapDatabaseFile(dbPath, tempPath);
+                if (!TryOpen(dbPath, out var error))
+                    throw new InvalidOperationException(error);
+            }
+            finally
+            {
+                _notRebuilding.Set();
+            }
+        }
+        finally
+        {
+            ClearProgress();
+            TryDeleteRebuildArtifacts(tempPath);
+        }
+    }
+
+    /// <summary>Atomically replace <paramref name="targetPath"/> with the freshly built <paramref name="newPath"/>.</summary>
+    private static void SwapDatabaseFile(string targetPath, string newPath)
+    {
+        // Remove the target's stale sidecars (a leftover -wal would corrupt the
+        // new file when next opened).
+        TryDelete(targetPath + "-wal");
+        TryDelete(targetPath + "-shm");
+
+        // Replace the main file. Retry briefly: a background reader (e.g. the
+        // content hash) may not have released its handle the instant we asked it
+        // to cancel — cooperative cancellation has a short tail.
+        Exception? last = null;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            try
+            {
+                File.Move(newPath, targetPath, overwrite: true);
+                last = null;
+                break;
+            }
+            catch (IOException ex)
+            {
+                last = ex;
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                Thread.Sleep(50);
+            }
+        }
+        if (last is not null)
+            throw last;
+
+        TryDelete(newPath + "-wal");
+        TryDelete(newPath + "-shm");
+    }
+
+    private static void TryDeleteRebuildArtifacts(string tempPath)
+    {
+        foreach (var suffix in new[] { "", "-wal", "-shm" })
+            TryDelete(tempPath + suffix);
+    }
+
+    /// <summary>Fold a database's WAL into its main file so a plain file move is complete.</summary>
+    private static void CheckpointWal(string dbPath)
+    {
+        try
+        {
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            cmd.ExecuteNonQuery();
+        }
+        catch { /* best-effort; the move still proceeds */ }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); }
+    }
 
     private IRulesDatabase Current
     {
         get
         {
+            // If an in-place rebuild is swapping the connection, wait for it to
+            // finish rather than throwing — the DB is logically still loaded.
+            if (!_notRebuilding.IsSet)
+                _notRebuilding.Wait(TimeSpan.FromSeconds(30));
             lock (_sync)
                 return _current ?? throw new InvalidOperationException("Load a rules database before using the character builder.");
         }
@@ -482,10 +632,19 @@ public sealed class RulesDatabaseService : IRulesDatabase
             ContentHashComputing = true;
             SizeBytes = size;
             LoadedAt = DateTime.UtcNow;
+
+            // Cancel any prior (now-stale) hash and start a fresh cancellable one.
+            _hashCts?.Cancel();
+            _hashCts?.Dispose();
+            _hashCts = new CancellationTokenSource();
         }
 
         old?.Dispose();
         Changed?.Invoke();
+
+        CancellationToken hashToken;
+        lock (_sync)
+            hashToken = _hashCts!.Token;
 
         // Compute the content hash off the UI thread — a ~50 MB DB takes a
         // couple of seconds to fingerprint. Fire-and-forget; the UI watches
@@ -494,7 +653,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         {
             try
             {
-                var hash = RulesDbContentHasher.ComputeContentHash(databasePath);
+                var hash = RulesDbContentHasher.ComputeContentHash(databasePath, hashToken);
                 lock (_sync)
                 {
                     if (!ReferenceEquals(_current, database))
@@ -503,6 +662,10 @@ public sealed class RulesDatabaseService : IRulesDatabase
                     ContentHashComputing = false;
                 }
                 Changed?.Invoke();
+            }
+            catch (OperationCanceledException)
+            {
+                // Superseded by a newer load/rebuild — the new load owns the hash.
             }
             catch
             {
@@ -514,7 +677,17 @@ public sealed class RulesDatabaseService : IRulesDatabase
                 }
                 Changed?.Invoke();
             }
-        });
+        }, hashToken);
+    }
+
+    /// <summary>
+    /// Cancel the in-flight background content-hash and wait briefly for it to
+    /// release its read connection, so the working DB file can be replaced.
+    /// </summary>
+    private void CancelBackgroundHash()
+    {
+        lock (_sync)
+            _hashCts?.Cancel();
     }
 
     private void SetStatus(string message, bool isError)

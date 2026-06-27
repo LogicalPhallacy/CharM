@@ -147,18 +147,25 @@ public sealed class RulesDbLayerStore
     }
 
     /// <summary>
-    /// Flip the enabled flag on many parts at once (does not rebuild). Unknown
-    /// ids are ignored. Use this for category-level toggles so the manifest is
-    /// written once and the working DB is rebuilt only once afterwards.
+    /// Apply a map of part-id → desired enabled state in one manifest write
+    /// (does not rebuild). Unknown ids are ignored. Use this for "apply all
+    /// pending changes" so a mixed enable/disable set rebuilds the working DB
+    /// only once afterwards.
     /// </summary>
-    public PartManifest SetEnabled(IEnumerable<string> partIds, bool enabled)
+    public PartManifest SetEnabled(IReadOnlyDictionary<string, bool> states)
     {
-        var ids = new HashSet<string>(partIds, StringComparer.OrdinalIgnoreCase);
         var manifest = LoadManifest();
         foreach (var entry in manifest.Parts)
         {
-            if (ids.Contains(entry.PartId))
-                entry.Enabled = enabled;
+            // Manifest part-ids are case-insensitive; probe with the entry's id.
+            foreach (var kvp in states)
+            {
+                if (string.Equals(kvp.Key, entry.PartId, StringComparison.OrdinalIgnoreCase))
+                {
+                    entry.Enabled = kvp.Value;
+                    break;
+                }
+            }
         }
         SaveManifest(manifest);
         return manifest;

@@ -11,43 +11,55 @@
 @implements IDisposable
 
 <div class="flex items-center gap-2">
-    <button @onclick="StartNewCharacter"
-            disabled="@(!RulesDatabase.IsLoaded)"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors scale-98-active no-print disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Start a new character">
-        <span class="material-symbols-outlined text-lg">add</span>
-        <span class="hidden sm:inline">New</span>
-    </button>
+    <!-- Hidden file input for Import; its label lives in the Character menu. -->
     <InputFile id="dnd4e-import-input"
                OnChange="ImportCharacterAsync"
                class="absolute -left-[9999px] w-px h-px overflow-hidden opacity-0" />
-    <label for="dnd4e-import-input"
-           class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors scale-98-active no-print @(RulesDatabase.IsLoaded ? "" : "opacity-40 pointer-events-none")"
-           title="Import .dnd4e file">
-        <span class="material-symbols-outlined text-lg">upload</span>
-        <span class="hidden sm:inline">Import</span>
-    </label>
-    <button @onclick="ExportCharacterAsync"
-            disabled="@(!SessionService.HasSession || !RulesDatabase.IsLoaded)"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors scale-98-active no-print disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Export .dnd4e file">
-        <span class="material-symbols-outlined text-lg">download</span>
-        <span class="hidden sm:inline">Export</span>
-    </button>
-    <button @onclick="CopyAsTextAsync"
-            disabled="@(!SessionService.HasSession || !RulesDatabase.IsLoaded)"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors scale-98-active no-print disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Copy character as OCB-compatible SummaryText (forum-shareable)">
-        <span class="material-symbols-outlined text-lg">content_copy</span>
-        <span class="hidden sm:inline">Copy Text</span>
-    </button>
-    <button @onclick="OpenPasteTextModal"
-            disabled="@(!RulesDatabase.IsLoaded)"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors scale-98-active no-print disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Paste a SummaryText character (from a forum or the OCB clipboard)">
-        <span class="material-symbols-outlined text-lg">content_paste</span>
-        <span class="hidden sm:inline">Paste Text</span>
-    </button>
+
+    <!-- Character Management dropdown: New / Import / Export / Copy / Paste -->
+    <div class="relative no-print">
+        <button @onclick="ToggleCharMenu"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors scale-98-active"
+                title="Character management">
+            <span class="material-symbols-outlined text-lg">manage_accounts</span>
+            <span class="hidden sm:inline">Character</span>
+            <span class="material-symbols-outlined text-base">@(_charMenuOpen ? "expand_less" : "expand_more")</span>
+        </button>
+        @if (_charMenuOpen)
+        {
+            <div class="absolute right-0 mt-1 w-56 z-50 bg-surface-container-lowest rounded shadow-lg ghost-border p-1 text-sm">
+                <button @onclick="NewCharacterFromMenu"
+                        disabled="@(!RulesDatabase.IsLoaded)"
+                        class="w-full flex items-center gap-2 px-3 py-2 text-left font-label font-medium text-on-surface rounded hover:bg-surface-container-low transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    <span class="material-symbols-outlined text-lg">add</span>
+                    New character
+                </button>
+                <label for="dnd4e-import-input" @onclick="CloseCharMenu"
+                       class="w-full flex items-center gap-2 px-3 py-2 text-left font-label font-medium text-on-surface rounded hover:bg-surface-container-low transition-colors cursor-pointer @(RulesDatabase.IsLoaded ? "" : "opacity-40 pointer-events-none")">
+                    <span class="material-symbols-outlined text-lg">upload</span>
+                    Import .dnd4e
+                </label>
+                <button @onclick="ExportCharacterFromMenu"
+                        disabled="@(!SessionService.HasSession || !RulesDatabase.IsLoaded)"
+                        class="w-full flex items-center gap-2 px-3 py-2 text-left font-label font-medium text-on-surface rounded hover:bg-surface-container-low transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    <span class="material-symbols-outlined text-lg">download</span>
+                    Export .dnd4e
+                </button>
+                <button @onclick="CopyAsTextFromMenu"
+                        disabled="@(!SessionService.HasSession || !RulesDatabase.IsLoaded)"
+                        class="w-full flex items-center gap-2 px-3 py-2 text-left font-label font-medium text-on-surface rounded hover:bg-surface-container-low transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    <span class="material-symbols-outlined text-lg">content_copy</span>
+                    Copy as text
+                </button>
+                <button @onclick="PasteTextFromMenu"
+                        disabled="@(!RulesDatabase.IsLoaded)"
+                        class="w-full flex items-center gap-2 px-3 py-2 text-left font-label font-medium text-on-surface rounded hover:bg-surface-container-low transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    <span class="material-symbols-outlined text-lg">content_paste</span>
+                    Paste text
+                </button>
+            </div>
+        }
+    </div>
     <button @onclick="UndoLastChoice"
             disabled="@(!(SessionService.Session?.ChoiceHistory.Count > 0))"
             class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors scale-98-active no-print disabled:opacity-40 disabled:cursor-not-allowed"
@@ -118,6 +130,35 @@
     private string _pasteTextBuffer = string.Empty;
     private string? _pasteTextStatus;
     private bool _pasteTextStatusIsError;
+    private bool _charMenuOpen;
+
+    private void ToggleCharMenu() => _charMenuOpen = !_charMenuOpen;
+    private void CloseCharMenu() => _charMenuOpen = false;
+
+    // Menu-item wrappers: close the dropdown, then run the existing action.
+    private async Task NewCharacterFromMenu()
+    {
+        CloseCharMenu();
+        await StartNewCharacter();
+    }
+
+    private async Task ExportCharacterFromMenu()
+    {
+        CloseCharMenu();
+        await ExportCharacterAsync();
+    }
+
+    private async Task CopyAsTextFromMenu()
+    {
+        CloseCharMenu();
+        await CopyAsTextAsync();
+    }
+
+    private void PasteTextFromMenu()
+    {
+        CloseCharMenu();
+        OpenPasteTextModal();
+    }
 
     private void OpenPasteTextModal()
     {

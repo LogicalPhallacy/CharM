@@ -40,36 +40,46 @@ public sealed class PartManagementService
     }
 
     /// <summary>
-    /// Enable or disable a part and rebuild the working database, then reload it.
+    /// Enable or disable a single part and rebuild the working database.
     /// </summary>
     public Task SetPartEnabledAsync(string partId, bool enabled, CancellationToken cancellationToken = default)
-        => SetPartsEnabledAsync([partId], enabled, cancellationToken);
+        => ApplyPartStatesAsync(
+            new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase) { [partId] = enabled },
+            cancellationToken);
 
     /// <summary>
-    /// Enable or disable many parts at once (e.g. a whole category), rebuilding
-    /// the working database a single time, then reload it. Shared by the
-    /// single-part toggle so both paths rebuild identically.
+    /// Enable or disable many parts to the same state and rebuild once.
     /// </summary>
-    public async Task SetPartsEnabledAsync(
+    public Task SetPartsEnabledAsync(
         IReadOnlyCollection<string> partIds, bool enabled, CancellationToken cancellationToken = default)
+        => ApplyPartStatesAsync(
+            partIds.ToDictionary(id => id, _ => enabled, StringComparer.OrdinalIgnoreCase),
+            cancellationToken);
+
+    /// <summary>
+    /// Apply a batch of part-id → desired enabled states (a mix of enables and
+    /// disables) and rebuild the working database a single time, then reopen it.
+    /// The single shared apply path for the UI's "Apply changes" button and the
+    /// single/category convenience helpers.
+    /// </summary>
+    public async Task ApplyPartStatesAsync(
+        IReadOnlyDictionary<string, bool> states, CancellationToken cancellationToken = default)
     {
-        if (partIds.Count == 0) return;
+        if (states.Count == 0) return;
 
-        // Release the loaded DB before rebuilding it in place (see Unload).
-        _db.Unload();
-        await Task.Run(() =>
-        {
-            lock (_sync)
-            {
-                var store = new RulesDbLayerStore(_workingDirectory);
-                if (!store.IsInitialized)
-                    throw new InvalidOperationException("This database was not built through the layered pipeline; rebuild it to manage parts.");
-                store.SetEnabled(partIds, enabled);
-                store.Rebuild(WorkingDbPath);
-            }
-        }, cancellationToken);
+        var store = new RulesDbLayerStore(_workingDirectory);
+        if (!store.IsInitialized)
+            throw new InvalidOperationException("This database was not built through the layered pipeline; rebuild it to manage parts.");
 
-        ReloadDatabase();
+        // Manifest-only change (does not touch the working rules.db).
+        store.SetEnabled(states);
+
+        // Re-materialize rules.db without taking it offline: build into a temp
+        // file (DB stays loaded + serving reads), then swap. Progress flows to
+        // RulesDatabaseService.CurrentProgress.
+        await _db.RebuildInPlaceAsync(
+            WorkingDbPath,
+            (tempPath, progress) => Task.Run(() => { lock (_sync) store.Rebuild(tempPath, progress); }, cancellationToken));
     }
 
     /// <summary>Check the configured remote source for new/updated parts.</summary>
@@ -97,16 +107,14 @@ public sealed class PartManagementService
         if (!store.IsInitialized)
             throw new InvalidOperationException("No layered store to update.");
 
-        // Release the loaded DB before rebuilding it in place (see Unload).
-        _db.Unload();
+        // Download + archive the parts first (writes to the archive/manifest, not
+        // the working rules.db), so the DB stays open during the network I/O.
         await store.InstallRemotePartsAsync(source, parts, cancellationToken);
-        await Task.Run(() => { lock (_sync) store.Rebuild(WorkingDbPath); }, cancellationToken);
-        ReloadDatabase();
-    }
 
-    private void ReloadDatabase()
-    {
-        if (!_db.TryOpen(WorkingDbPath, out var error))
-            throw new InvalidOperationException(error);
+        // Then re-materialize rules.db without taking it offline (build to temp,
+        // swap). DB stays "loaded" throughout; progress flows to CurrentProgress.
+        await _db.RebuildInPlaceAsync(
+            WorkingDbPath,
+            (tempPath, progress) => Task.Run(() => { lock (_sync) store.Rebuild(tempPath, progress); }, cancellationToken));
     }
 }

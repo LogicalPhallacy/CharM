@@ -2,6 +2,7 @@
 @using Microsoft.JSInterop
 @inject RulesDatabaseService RulesDatabase
 @inject CharacterSessionService SessionService
+@inject NavigationManager Navigation
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -77,6 +78,12 @@
                     </div>
                 }
 
+                <button @onclick="GoToParts"
+                        class="w-full flex items-center gap-2 px-3 py-2 mb-3 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors">
+                    <span class="material-symbols-outlined text-base text-primary">extension</span>
+                    Manage parts &amp; sourcebooks
+                </button>
+
                 <div class="flex gap-2">
                     <button @onclick="DownloadBackup"
                             disabled="@_downloading"
@@ -145,6 +152,12 @@
 
     private void ToggleDropdown() => _isOpen = !_isOpen;
     private void CloseDropdown() => _isOpen = false;
+
+    private void GoToParts()
+    {
+        CloseDropdown();
+        Navigation.NavigateTo("/rules-parts", forceLoad: false);
+    }
 
     private void RequestManage()
     {
