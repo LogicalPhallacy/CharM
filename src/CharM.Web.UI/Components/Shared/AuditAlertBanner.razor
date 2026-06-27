@@ -1,6 +1,6 @@
 @using CharM.Web.Services
+@inherits CharmComponentBase
 @inject CharacterSessionService SessionService
-@implements IDisposable
 
 @{
     var alerts = SessionService.AuditCurrentSession();
@@ -31,9 +31,9 @@
         SessionService.Changed += OnChanged;
     }
 
-    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+    private void OnChanged() => NotifyStateChanged();
 
-    public void Dispose()
+    protected override void OnDispose()
     {
         SessionService.Changed -= OnChanged;
     }

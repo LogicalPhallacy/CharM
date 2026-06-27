@@ -46,6 +46,15 @@ else
 
     var displayPendingChoices = OrderPendingChoices(pendingChoices).ToList();
 
+    // Required = non-skippable picks (feats, powers, ability scores, and
+    // Paragon/Epic which are Optional in the data but mandatory once at-tier).
+    // Optional = backgrounds, themes, alignment/gender, etc. that can be left
+    // unfilled. The box shows automatically only for required picks; when only
+    // optional ones remain it's revealed via the Character Overview toggle.
+    var requiredPendingCount = pendingChoices.Count(c => !IsSkippableChoice(c));
+    var hasOptionalOnly = requiredPendingCount == 0 && pendingChoices.Count > 0;
+    var showChoicesBox = requiredPendingCount > 0 || (_showOptionalChoices && pendingChoices.Count > 0);
+
     <!-- Compact Header -->
     <header class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
@@ -107,12 +116,12 @@ else
     </header>
 
     <!-- Pending Choices Banner -->
-    @if (pendingChoices.Count > 0)
+    @if (showChoicesBox)
     {
         <section class="bg-tertiary-container/50 p-4 rounded ghost-border mb-6">
             <h2 class="font-label text-[10px] font-bold uppercase tracking-[0.2em] text-on-tertiary-container mb-2">
                 <span class="material-symbols-outlined text-sm align-middle mr-1">pending_actions</span>
-                Choices Needed (@pendingChoices.Count)
+                @(requiredPendingCount > 0 ? $"Choices Needed ({pendingChoices.Count})" : $"Optional Choices ({pendingChoices.Count})")
             </h2>
             <div class="flex flex-wrap gap-2">
                 @foreach (var choice in displayPendingChoices.Take(12))
@@ -575,8 +584,16 @@ else
         <div class="md:col-span-4 lg:col-span-4 space-y-6">
             <!-- Character Overview -->
             <div class="bg-surface-container-lowest ghost-border overflow-hidden">
-                <div class="bg-stone-200/50 px-4 py-2 border-b border-outline-variant/20">
+                <div class="bg-stone-200/50 px-4 py-2 border-b border-outline-variant/20 flex items-center justify-between gap-2">
                     <h2 class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">Character Overview</h2>
+                    @if (hasOptionalOnly)
+                    {
+                        <button @onclick="() => _showOptionalChoices = !_showOptionalChoices"
+                                title="display optional choices"
+                                class="flex items-center -my-1 p-1 rounded transition-colors @(_showOptionalChoices ? "text-primary bg-surface-container-low" : "text-outline hover:text-on-surface hover:bg-surface-container-low")">
+                            <span class="material-symbols-outlined text-base">checklist</span>
+                        </button>
+                    }
                 </div>
                 <div class="p-4 space-y-4">
                     <div class="flex gap-4">
@@ -806,7 +823,7 @@ else
         </div>
     </div>
 
-    @if (_showCompleteToast)
+    @if (_showCompleteToast && pendingChoices.Count == 0)
     {
         <div class="fixed top-20 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-6 py-3 bg-tertiary-container rounded-lg shadow-lg ghost-border no-print">
             <span class="material-symbols-outlined text-on-tertiary-container">check_circle</span>
@@ -1300,6 +1317,11 @@ else
     private bool _lastCompleteState;
     private CancellationTokenSource? _completeToastCts;
 
+    // When the only remaining choices are optional/skippable (e.g. Background),
+    // the Choices Needed box is hidden by default and revealed by the small
+    // checklist toggle in the Character Overview header.
+    private bool _showOptionalChoices;
+
     // Inline-edit state for header identity
     private bool _editingName;
     private bool _editingLevel;
@@ -1365,7 +1387,7 @@ else
     {
         SessionService.Changed += HandleSessionChanged;
         RestoreState.Changed += HandleSessionChanged;
-        UpdateCompleteToast(SessionService.Session?.IsComplete == true);
+        UpdateCompleteToast(IsCharacterComplete(SessionService.Session));
     }
 
     protected override Task OnAfterRenderAsync(bool firstRender)
@@ -1656,6 +1678,17 @@ else
     private static bool IsSkippableChoice(PendingChoice choice) =>
         !IsRequiredType(choice.Slot.ElementType)
         && (choice.Slot.Optional || IsSkippableType(choice.Slot.ElementType));
+
+    /// <summary>
+    /// True only when the character has NO pending choices at all — required
+    /// (feats, powers, ability scores, at-tier Paragon/Epic) OR optional
+    /// (background, theme, alignment). Drives the "Character Complete" toast,
+    /// which must not appear while anything is still pickable. This is stricter
+    /// than <see cref="CharacterSession.IsComplete"/>, which ignores optional
+    /// slots and so reports complete while an optional choice is outstanding.
+    /// </summary>
+    private static bool IsCharacterComplete(CharacterSession? session) =>
+        session is not null && session.GetAllPendingChoices().Count == 0;
 
     // Choices created at a specific character level (most commonly feat
     // slots at L1/L2/L4/...) carry that level on the underlying select
@@ -2298,7 +2331,7 @@ else
         _lastAutoResolveChoiceCount = -1;
         _lastAutoResolvePendingCount = -1;
         _lastAutoResolveScoresSet = false;
-        UpdateCompleteToast(SessionService.Session?.IsComplete == true);
+        UpdateCompleteToast(IsCharacterComplete(SessionService.Session));
         _ = InvokeAsync(StateHasChanged);
     }
 

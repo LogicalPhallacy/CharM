@@ -1,6 +1,7 @@
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.JSInterop
 @using CharM.Web.Services
+@inherits CharmComponentBase
 @inject CharacterSessionService SessionService
 @inject RulesDatabaseService RulesDatabase
 @inject BrowserStorageService Storage
@@ -8,7 +9,6 @@
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
 @inject DisplaySettingsService DisplaySettings
-@implements IDisposable
 
 <div class="flex items-center gap-2">
     <!-- Hidden file input for Import; its label lives in the Character menu. -->
@@ -318,10 +318,9 @@
         _statusMessage = "Undid last choice";
     }
 
-    private void HandleSessionChanged()
-        => _ = InvokeAsync(StateHasChanged);
+    private void HandleSessionChanged() => NotifyStateChanged();
 
-    public void Dispose()
+    protected override void OnDispose()
     {
         SessionService.Changed -= HandleSessionChanged;
     }

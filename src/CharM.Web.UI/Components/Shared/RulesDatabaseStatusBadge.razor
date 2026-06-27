@@ -1,10 +1,10 @@
 @using CharM.Web.Services
 @using Microsoft.JSInterop
+@inherits CharmComponentBase
 @inject RulesDatabaseService RulesDatabase
 @inject CharacterSessionService SessionService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
-@implements IDisposable
 
 @if (RulesDatabase.IsLoaded && !RulesDatabase.IsManageMode)
 {
@@ -222,9 +222,9 @@
         return $"{bytes} B";
     }
 
-    private void HandleChanged() => _ = InvokeAsync(StateHasChanged);
+    private void HandleChanged() => NotifyStateChanged();
 
-    public void Dispose()
+    protected override void OnDispose()
     {
         RulesDatabase.Changed -= HandleChanged;
         SessionService.Changed -= HandleChanged;

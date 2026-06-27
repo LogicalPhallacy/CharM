@@ -1,11 +1,11 @@
 @page "/rules-parts"
 @using CharM.RulesDb.Import
 @using CharM.Web.Services
+@inherits CharmComponentBase
 @inject PartManagementService Parts
 @inject PartPreferencesStore Preferences
 @inject RulesDatabaseService RulesDatabase
 @inject CharacterSessionService SessionService
-@implements IDisposable
 
 <PageTitle>Rules Parts - CharM</PageTitle>
 
@@ -292,9 +292,9 @@
         RulesDatabase.Changed += HandleRulesDatabaseChanged;
     }
 
-    private void HandleRulesDatabaseChanged() => _ = InvokeAsync(StateHasChanged);
+    private void HandleRulesDatabaseChanged() => NotifyStateChanged();
 
-    public void Dispose()
+    protected override void OnDispose()
     {
         RulesDatabase.Changed -= HandleRulesDatabaseChanged;
     }

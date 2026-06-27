@@ -1,6 +1,6 @@
 @using CharM.Web.Services
+@inherits CharmComponentBase
 @inject CharacterRestoreState RestoreState
-@implements IDisposable
 
 @if (RestoreState.Phase == RestorePhase.Restoring)
 {
@@ -21,10 +21,9 @@
         RestoreState.Changed += HandleChanged;
     }
 
-    private void HandleChanged()
-        => _ = InvokeAsync(StateHasChanged);
+    private void HandleChanged() => NotifyStateChanged();
 
-    public void Dispose()
+    protected override void OnDispose()
     {
         RestoreState.Changed -= HandleChanged;
     }
