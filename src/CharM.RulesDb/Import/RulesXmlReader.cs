@@ -1,6 +1,6 @@
-using System.Text.RegularExpressions;
 using System.Xml;
 using CharM.Engine.Rules;
+using static CharM.RulesDb.Import.RulesXmlImportHelpers;
 
 namespace CharM.RulesDb.Import;
 
@@ -432,29 +432,4 @@ public static partial class RulesXmlReader
     /// </summary>
     private static string? GetAttrCI(XmlReader reader, string upper, string lower) =>
         reader.GetAttribute(upper) ?? reader.GetAttribute(lower);
-
-    private static bool ParseBool(string? value) =>
-        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-
-    private static int? ParseIntOrNull(string? value) =>
-        int.TryParse(value, out int result) ? result : null;
-
-    /// <summary>
-    /// Collapse whitespace runs (including the leading tab/newline indentation present
-    /// in CB XML) and split paragraph-like breaks into single newlines so rendering
-    /// stays predictable.
-    /// </summary>
-    private static string NormalizeDescription(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
-        // Convert tabs to spaces, then split on any newline-run, trim each line, drop blanks, join with \n.
-        var lines = raw.Replace('\t', ' ')
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(l => WhitespaceRegex().Replace(l, " ").Trim())
-            .Where(l => l.Length > 0);
-        return string.Join("\n", lines);
-    }
-
-    [GeneratedRegex(@"\s+")]
-    private static partial Regex WhitespaceRegex();
 }

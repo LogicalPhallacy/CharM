@@ -13,6 +13,14 @@ public sealed partial class CharacterSession
     public IReadOnlyList<PendingChoice> GetAllPendingChoices()
         => _wizard.GetPendingChoices();
 
+    /// <summary>
+    /// Get the pending choice slots (without display labels) — cheaper than
+    /// <see cref="GetAllPendingChoices"/> for callers that only match by
+    /// owner/type, such as the positional importer.
+    /// </summary>
+    public IReadOnlyList<ChoiceSlot> GetPendingSlots()
+        => _wizard.GetPendingSlotsFromTree();
+
     /// <summary>Get candidate elements for a specific choice slot.</summary>
     public IReadOnlyList<RulesElement> GetCandidatesForSlot(
         ChoiceSlot slot, string? sourceFilter = null, bool skipPrereqs = false)
@@ -76,6 +84,16 @@ public sealed partial class CharacterSession
         => _wizard.ElementTree.GetActiveElements()
             .Where(e => string.Equals(e.Type, type, StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+    /// <summary>
+    /// True when an active element of the given type and internal-id is present.
+    /// Allocation-free alternative to <see cref="GetAllElementsOfType"/>.<c>Any()</c>
+    /// for hot import paths that only need an existence check.
+    /// </summary>
+    public bool HasActiveElementOfType(string type, string internalId)
+        => _wizard.ElementTree.GetActiveElements()
+            .Any(e => string.Equals(e.Type, type, StringComparison.OrdinalIgnoreCase)
+                   && string.Equals(e.InternalId, internalId, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True when an element should be presented as houseruled in UI/export

@@ -1,10 +1,11 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 
 namespace CharM.Engine.Prerequisites;
 
 /// <summary>
 /// Evaluates <c>requires</c> condition expressions against a character's element set.
-/// 
+///
 /// Grammar:
 ///   requires     := '!' negated_expr | or_expr | and_expr
 ///   negated_expr := or_expr | and_expr
@@ -14,16 +15,17 @@ namespace CharM.Engine.Prerequisites;
 ///                  | type ':' category
 ///                  | ELEMENT_NAME
 ///
-/// Evaluation:
-///   1. Leading '!' inverts the entire result
-///   2. If string contains '|' → OR mode (short-circuit: first true wins)
-///   3. Otherwise '&amp;' splits into AND (short-circuit: first false fails)
-///   4. Parenthesized sub-expressions recurse
-///   5. 'Type:CategoryMatch' checks character has element of type matching category
-///   6. Plain names check element existence
+/// The expression string is parsed ONCE into a cached <see cref="RequiresNode"/>
+/// tree (keyed by the raw string) and re-evaluated against character state on
+/// each call. Grammar and short-circuit semantics are identical to the previous
+/// string-rescanning implementation; only the per-call string splitting /
+/// allocation is eliminated, which matters because slot reconciliation evaluates
+/// requires across the whole element tree after every pick.
 /// </summary>
 public sealed class RequiresEvaluator
 {
+    private static readonly ConcurrentDictionary<string, RequiresNode> ParseCache = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Evaluate a requires expression against a set of character elements.
     /// </summary>
@@ -41,107 +43,78 @@ public sealed class RequiresEvaluator
         if (string.IsNullOrWhiteSpace(requires))
             return true;
 
-        return EvaluateExpression(requires.AsSpan().Trim(), hasElement, hasElementOfTypeAndCategory, characterLevel);
+        var node = ParseCache.GetOrAdd(requires, static r => Parse(r.AsSpan()));
+        return node.Evaluate(hasElement, hasElementOfTypeAndCategory, characterLevel);
     }
 
-    private static bool EvaluateExpression(
-        ReadOnlySpan<char> expr,
-        Func<string, bool> hasElement,
-        Func<string, string, bool>? hasElementOfTypeAndCategory,
-        int characterLevel)
+    // ===================== Parsing (once per distinct string) =====================
+
+    private static RequiresNode Parse(ReadOnlySpan<char> expr)
     {
         expr = expr.Trim();
         if (expr.IsEmpty)
-            return true;
+            return RequiresNode.AlwaysTrue;
 
-        // Leading '!' negates the entire expression
+        // Leading '!' negates the entire expression.
         if (expr[0] == '!')
-        {
-            return !EvaluateExpression(expr[1..], hasElement, hasElementOfTypeAndCategory, characterLevel);
-        }
+            return new NotNode(Parse(expr[1..]));
 
-        // Check for top-level OR (pipe outside parentheses)
+        // Top-level OR (pipe outside parentheses).
         if (TrySplitTopLevel(expr, '|', out var orParts))
-        {
-            foreach (var part in orParts)
-            {
-                if (EvaluateExpression(part.AsSpan(), hasElement, hasElementOfTypeAndCategory, characterLevel))
-                    return true;
-            }
-            return false;
-        }
+            return new OrNode(orParts.ConvertAll(p => Parse(p.AsSpan())));
 
-        // Check for top-level AND (& outside parentheses)
+        // Top-level AND (& outside parentheses).
         if (TrySplitTopLevel(expr, '&', out var andParts))
-        {
-            foreach (var part in andParts)
-            {
-                if (!EvaluateExpression(part.AsSpan(), hasElement, hasElementOfTypeAndCategory, characterLevel))
-                    return false;
-            }
-            return true;
-        }
+            return new AndNode(andParts.ConvertAll(p => Parse(p.AsSpan())));
 
-        // Single token: could be parenthesized, Type:Category, level check, or plain name
-        return EvaluateToken(expr, hasElement, hasElementOfTypeAndCategory, characterLevel);
+        return ParseToken(expr);
     }
 
-    private static bool EvaluateToken(
-        ReadOnlySpan<char> token,
-        Func<string, bool> hasElement,
-        Func<string, string, bool>? hasElementOfTypeAndCategory,
-        int characterLevel)
+    private static RequiresNode ParseToken(ReadOnlySpan<char> token)
     {
         token = token.Trim();
         if (token.IsEmpty)
-            return true;
+            return RequiresNode.AlwaysTrue;
 
-        // Parenthesized sub-expression
+        // Parenthesized sub-expression.
         if (token[0] == '(' && token[^1] == ')')
-        {
-            return EvaluateExpression(token[1..^1], hasElement, hasElementOfTypeAndCategory, characterLevel);
-        }
+            return Parse(token[1..^1]);
 
         string tokenStr = token.ToString();
 
-        // Level check: "N level" pattern (e.g., "11 level", "21 level")
+        // Level check: "N level" pattern (e.g., "11 level", "21 level").
         if (tokenStr.EndsWith(" level", StringComparison.OrdinalIgnoreCase))
         {
-            var numPart = tokenStr[..^6].Trim(); // strip " level"
+            var numPart = tokenStr[..^6].Trim();
             if (int.TryParse(numPart, out int requiredLevel))
-                return characterLevel >= requiredLevel;
+                return new LevelNode(requiredLevel);
         }
 
-        // Level check: "level N" pattern (reversed, rare — 1 instance in data)
+        // Level check: "level N" pattern (reversed, rare — 1 instance in data).
         if (tokenStr.StartsWith("level ", StringComparison.OrdinalIgnoreCase))
         {
-            var numPart = tokenStr[6..].Trim(); // strip "level "
+            var numPart = tokenStr[6..].Trim();
             if (int.TryParse(numPart, out int requiredLevel))
-                return characterLevel >= requiredLevel;
+                return new LevelNode(requiredLevel);
         }
 
         if (tokenStr.Equals("Heroic Tier", StringComparison.OrdinalIgnoreCase))
-            return characterLevel >= 1;
+            return new LevelNode(1);
         if (tokenStr.Equals("Paragon Tier", StringComparison.OrdinalIgnoreCase))
-            return characterLevel >= 11;
+            return new LevelNode(11);
         if (tokenStr.Equals("Epic Tier", StringComparison.OrdinalIgnoreCase))
-            return characterLevel >= 21;
+            return new LevelNode(21);
 
-        // Type:Category check (e.g., "Power:encounter")
+        // Type:Category check (e.g., "Power:encounter").
         int colonIdx = tokenStr.IndexOf(':');
         if (colonIdx > 0 && colonIdx < tokenStr.Length - 1)
         {
             string type = tokenStr[..colonIdx].Trim();
             string category = tokenStr[(colonIdx + 1)..].Trim();
-
-            if (hasElementOfTypeAndCategory is not null)
-                return hasElementOfTypeAndCategory(type, category);
-
-            // Fallback: treat as plain element name
-            return hasElement(tokenStr);
+            return new TypeCategoryNode(type, category, tokenStr);
         }
 
-        return hasElement(tokenStr);
+        return new NameNode(tokenStr);
     }
 
     /// <summary>
@@ -194,4 +167,64 @@ public sealed class RequiresEvaluator
         parts.Add(expr[start..].ToString().Trim());
         return true;
     }
+}
+
+/// <summary>Parsed node of a requires expression. Immutable; safe to cache and share across threads.</summary>
+internal abstract class RequiresNode
+{
+    public static readonly RequiresNode AlwaysTrue = new TrueNode();
+
+    public abstract bool Evaluate(
+        Func<string, bool> hasElement,
+        Func<string, string, bool>? hasElementOfTypeAndCategory,
+        int characterLevel);
+}
+
+internal sealed class TrueNode : RequiresNode
+{
+    public override bool Evaluate(Func<string, bool> h, Func<string, string, bool>? c, int l) => true;
+}
+
+internal sealed class NotNode(RequiresNode child) : RequiresNode
+{
+    public override bool Evaluate(Func<string, bool> h, Func<string, string, bool>? c, int l)
+        => !child.Evaluate(h, c, l);
+}
+
+internal sealed class OrNode(List<RequiresNode> children) : RequiresNode
+{
+    public override bool Evaluate(Func<string, bool> h, Func<string, string, bool>? c, int l)
+    {
+        foreach (var child in children)
+            if (child.Evaluate(h, c, l)) return true;
+        return false;
+    }
+}
+
+internal sealed class AndNode(List<RequiresNode> children) : RequiresNode
+{
+    public override bool Evaluate(Func<string, bool> h, Func<string, string, bool>? c, int l)
+    {
+        foreach (var child in children)
+            if (!child.Evaluate(h, c, l)) return false;
+        return true;
+    }
+}
+
+internal sealed class LevelNode(int minLevel) : RequiresNode
+{
+    public override bool Evaluate(Func<string, bool> h, Func<string, string, bool>? c, int l)
+        => l >= minLevel;
+}
+
+internal sealed class TypeCategoryNode(string type, string category, string rawToken) : RequiresNode
+{
+    public override bool Evaluate(Func<string, bool> hasElement, Func<string, string, bool>? hasTypeCat, int l)
+        => hasTypeCat is not null ? hasTypeCat(type, category) : hasElement(rawToken);
+}
+
+internal sealed class NameNode(string name) : RequiresNode
+{
+    public override bool Evaluate(Func<string, bool> hasElement, Func<string, string, bool>? c, int l)
+        => hasElement(name);
 }

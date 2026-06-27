@@ -233,11 +233,8 @@ public static partial class PowerStatsBuilder
         IReadOnlyDictionary<string, Engine.Creation.ElementSourceMetadata>? sourceMetadata = null)
     {
         Dictionary<string, string>? fields = null;
-        foreach (var ((elementId, field), value) in overlay.ActiveModifications)
+        foreach (var (field, value) in overlay.GetModificationsFor(element.InternalId))
         {
-            if (!string.Equals(elementId, element.InternalId, StringComparison.Ordinal))
-                continue;
-
             fields ??= new Dictionary<string, string>(element.Fields, StringComparer.OrdinalIgnoreCase);
             fields[field] = value;
         }
@@ -813,10 +810,8 @@ public static partial class PowerStatsBuilder
         RulesElement ApplyOverlay(RulesElement element)
         {
             Dictionary<string, string>? fields = null;
-            foreach (var ((elementId, field), value) in snapshot.Builder.Overlay.ActiveModifications)
+            foreach (var (field, value) in snapshot.Builder.Overlay.GetModificationsFor(element.InternalId))
             {
-                if (!string.Equals(elementId, element.InternalId, StringComparison.Ordinal))
-                    continue;
                 fields ??= new Dictionary<string, string>(element.Fields, StringComparer.OrdinalIgnoreCase);
                 fields[field] = value;
             }
@@ -2463,11 +2458,8 @@ public static partial class PowerStatsBuilder
         Dictionary<string, string> CreateEffectiveFields(RulesElement element)
         {
             var fields = new Dictionary<string, string>(element.Fields, StringComparer.OrdinalIgnoreCase);
-            foreach (var ((elementId, field), value) in overlay.ActiveModifications)
-            {
-                if (string.Equals(elementId, element.InternalId, StringComparison.Ordinal))
-                    fields[field] = value;
-            }
+            foreach (var (field, value) in overlay.GetModificationsFor(element.InternalId))
+                fields[field] = value;
             return fields;
         }
 

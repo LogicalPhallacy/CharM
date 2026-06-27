@@ -225,8 +225,7 @@ public static partial class Dnd4eExporter
                 .Select(inv => inv.Item))
             .Where(l => string.Equals(l.Base.Type, "Weapon", StringComparison.OrdinalIgnoreCase))
             .Select(l => l.Base)
-            .GroupBy(b => b.InternalId ?? b.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
+            .DistinctBy(b => b.InternalId ?? b.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (weaponBasesPool.Count == 0) yield break;
 

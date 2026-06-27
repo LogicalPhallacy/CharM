@@ -47,6 +47,13 @@ public static partial class Dnd4eImporter
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(database);
 
+        // Pre-warm the element cache: the importer performs thousands of cold
+        // FindByInternalId / FindBy* lookups during alignment and replay. Without
+        // preload each miss serializes on the DB lock + JSON deserialize. Preload
+        // is idempotent, so repeated imports only pay the single table scan once.
+        database.Preload();
+        ImportPerfTrace.Mark("session-ctor");
+
         int level = snapshot.Level > 0
             ? snapshot.Level
             : (snapshot.LevelTrees.Count > 0
@@ -58,7 +65,14 @@ public static partial class Dnd4eImporter
             database.FindByNameAndType,
             (type, includeRules) => database.FindByType(type, includeRules),
             (type, source, includeRules) => database.FindByTypeAndSource(type, source, includeRules),
-            level);
+            level,
+            // Construct with auto-fill already OFF so InitializeLevel (run in the
+            // ctor) does not do candidate filtering to silently occupy slots — the
+            // importer overlays the source's explicit picks via AlignChildren and
+            // disables auto-fill anyway. This also avoids ~200ms of wasted
+            // per-level autofill work on high-level characters.
+            autoFillSelectDefaults: false);
+        ImportPerfTrace.Mark("copy");
 
         // Importing an already-built character: the source XML is the
         // authoritative record of every user pick. Disable the wizard's
@@ -122,6 +136,7 @@ public static partial class Dnd4eImporter
             session.RawSections[name] = element;
         }
 
+        ImportPerfTrace.Mark("clone-trees");
         foreach (var levelTree in snapshot.LevelTrees)
         {
             if (levelTree.Root.SourceElement is { } src)
@@ -142,6 +157,7 @@ public static partial class Dnd4eImporter
         foreach (var iid in snapshot.Houserules.HouseruledElementIds)
             session.HouseruledElementIds.Add(iid);
 
+        ImportPerfTrace.Mark("scores");
         if (snapshot.BaseAbilityScores.Count > 0)
         {
             var scores = new AbilityScoreSet
@@ -155,6 +171,7 @@ public static partial class Dnd4eImporter
             };
             session.SetAbilityScores(scores);
         }
+        ImportPerfTrace.Mark("maps");
 
         var unresolved = new List<string>();
         var deferredPicks = new List<DeferredPick>();
@@ -255,6 +272,7 @@ public static partial class Dnd4eImporter
             string levelOwner = levelTree.Root.InternalId
                 ?? $"ID_INTERNAL_LEVEL_{levelTree.Level}";
 
+            ImportPerfTrace.Mark("level-walk");
             AlignChildren(
                 levelTree.Root,
                 parentInternalId: levelOwner,
@@ -274,6 +292,7 @@ public static partial class Dnd4eImporter
         // Typically these are picks under a conditional grant whose Requires
         // only passes after a sibling subtree (e.g. the second hybrid class)
         // is processed. Loop until no further progress.
+        ImportPerfTrace.Mark("deferred");
         bool progress = true;
         int safety = (deferredPicks.Count + 4) * 4;
         while (progress && deferredPicks.Count > 0 && safety-- > 0)
@@ -388,8 +407,7 @@ public static partial class Dnd4eImporter
             if (!string.Equals(dp.Element.Type, "Power", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            bool already = session.GetAllElementsOfType("Power")
-                .Any(e => string.Equals(e.InternalId, dp.Element.InternalId, StringComparison.OrdinalIgnoreCase));
+            bool already = session.HasActiveElementOfType("Power", dp.Element.InternalId);
             if (already)
             {
                 if (!string.IsNullOrWhiteSpace(dp.ParentInternalId))
@@ -430,8 +448,7 @@ public static partial class Dnd4eImporter
             if (string.IsNullOrEmpty(dp.Element.InternalId)) continue;
             if (!tallyStandaloneInternalIds.Contains(dp.Element.InternalId)) continue;
 
-            bool already = session.GetAllElementsOfType("Class Feature")
-                .Any(e => string.Equals(e.InternalId, dp.Element.InternalId, StringComparison.OrdinalIgnoreCase));
+            bool already = session.HasActiveElementOfType("Class Feature", dp.Element.InternalId);
             if (already)
             {
                 deferredPicks.RemoveAt(i);
@@ -464,8 +481,7 @@ public static partial class Dnd4eImporter
             if (string.IsNullOrEmpty(dp.Element.InternalId)) continue;
             if (!tallyStandaloneInternalIds.Contains(dp.Element.InternalId)) continue;
 
-            bool already = session.GetAllElementsOfType(dp.Element.Type)
-                .Any(e => string.Equals(e.InternalId, dp.Element.InternalId, StringComparison.OrdinalIgnoreCase));
+            bool already = session.HasActiveElementOfType(dp.Element.Type, dp.Element.InternalId);
             if (!already)
                 session.AddGrabbagGrant(dp.Element, atLevel: dp.Level);
             deferredPicks.RemoveAt(i);
@@ -474,6 +490,7 @@ public static partial class Dnd4eImporter
         foreach (var dp in deferredPicks)
             unresolved.Add($"Deferred pick (no slot ever appeared): {dp.Element.Type}::{dp.Element.Name} (id={dp.Element.InternalId}) under owner={dp.ParentInternalId}");
 
+        ImportPerfTrace.Mark("finalize");
         RestoreEquipment(session, snapshot, database);
         ApplyGrabbagGrants(session, snapshot, database, unresolved);
         ApplyUserEditPicks(session, snapshot, database, unresolved);
@@ -656,6 +673,22 @@ public static partial class Dnd4eImporter
     {
         var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrEmpty(parentInternalId)) return result;
+
+        // Cheap guard: only owners whose children carry retraining swaps
+        // (replaces= + charelem) can have swap levels to resolve. Skipping the
+        // DB lookup + ReplaceDirective LINQ for the common non-swap node avoids
+        // per-node work across the whole AlignChildren walk.
+        bool hasSwapChild = false;
+        foreach (var child in parentNode.Children)
+        {
+            if (!string.IsNullOrEmpty(child.Replaces) && !string.IsNullOrEmpty(child.Charelem))
+            {
+                hasSwapChild = true;
+                break;
+            }
+        }
+        if (!hasSwapChild) return result;
+
         var ownerElement = database.FindByInternalId(parentInternalId);
         if (ownerElement is null) return result;
 
@@ -1492,10 +1525,10 @@ public static partial class Dnd4eImporter
     {
         if (string.IsNullOrEmpty(type)) return null;
 
-        foreach (var pc in session.GetAllPendingChoices())
+        foreach (var slot in session.GetPendingSlots())
         {
-            if (string.Equals(pc.Slot.ElementType, type, StringComparison.OrdinalIgnoreCase))
-                return pc.Slot;
+            if (string.Equals(slot.ElementType, type, StringComparison.OrdinalIgnoreCase))
+                return slot;
         }
         return null;
     }
@@ -1505,20 +1538,18 @@ public static partial class Dnd4eImporter
         string? parentInternalId,
         string? type)
     {
-        var pending = session.GetAllPendingChoices();
-
-        foreach (var pc in pending)
+        foreach (var slot in session.GetPendingSlots())
         {
-            if (!string.Equals(pc.Slot.OwnerInternalId, parentInternalId, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(slot.OwnerInternalId, parentInternalId, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             if (type is not null
-                && !string.Equals(pc.Slot.ElementType, type, StringComparison.OrdinalIgnoreCase))
+                && !string.Equals(slot.ElementType, type, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            return pc.Slot;
+            return slot;
         }
 
         return null;

@@ -86,7 +86,7 @@ internal sealed class ItemSummaryBlock : SummaryBlock
         string line = input[..nl];
         if (line.Length == 0) return false;
 
-        var tokens = line.Split(',').Select(t => t.Trim()).ToList();
+        var tokens = SplitCommaTokens(line);
         bool any = false;
         foreach (var raw in tokens)
         {

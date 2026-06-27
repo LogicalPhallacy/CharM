@@ -106,23 +106,8 @@ public static class RulesDbBuilder
     private static void InsertElement(SqliteCommand insertElement, SqliteCommand insertCategory, ParsedElement parsed)
     {
         var element = parsed.Element;
-        var jsonOptions = RulesDatabase.SharedJsonOptions;
 
-        // Serialize the ordered list-of-pairs view so duplicates (e.g. two
-        // <specific name="Hit"> children for primary/secondary attack) round-
-        // trip through the DB. Fall back to Fields if FieldEntries wasn't
-        // populated by the caller. Reader accepts both legacy object format
-        // and the array-of-pairs format.
-        IReadOnlyList<KeyValuePair<string, string>> entries = element.FieldEntries.Count > 0
-            ? element.FieldEntries
-            : element.Fields.Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value)).ToList();
-        string? fieldsJson = entries.Count > 0
-            ? JsonSerializer.Serialize(entries)
-            : null;
-
-        string? rulesJson = element.Rules.Count > 0
-            ? JsonSerializer.Serialize(element.Rules, jsonOptions)
-            : null;
+        var (fieldsJson, rulesJson) = RulesElementJson.Serialize(element);
 
         insertElement.Parameters["$id"].Value = element.InternalId;
         insertElement.Parameters["$name"].Value = element.Name;

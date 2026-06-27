@@ -345,10 +345,17 @@ public sealed partial class CharacterCreationWizard
             }
         }
 
-        var existingSlots = _tree.GetAllChoices()
-            .Where(slot => !string.IsNullOrWhiteSpace(slot.DirectiveKey))
-            .GroupBy(slot => slot.DirectiveKey!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var existingSlots = new Dictionary<string, ChoiceSlot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var slot in _tree.GetAllChoices())
+        {
+            if (string.IsNullOrWhiteSpace(slot.DirectiveKey))
+                continue;
+            // First-wins per directive key (matches the previous
+            // GroupBy(...).ToDictionary(g => g.First()) semantics), without the
+            // intermediate IGrouping allocations — this runs on the full tree
+            // after every pick.
+            existingSlots.TryAdd(slot.DirectiveKey!, slot);
+        }
 
         bool changed = false;
 

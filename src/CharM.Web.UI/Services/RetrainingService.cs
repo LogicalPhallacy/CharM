@@ -40,6 +40,17 @@ public sealed class RetrainingService
 {
     private readonly RulesDatabaseService _db;
 
+    /// <summary>
+    /// Element types scanned when projecting active character state (includes
+    /// Race/Class so prereq name-matching can see them).
+    /// </summary>
+    private static readonly string[] ActiveElementTypes =
+        ["Feat", "Class Feature", "Power", "Theme", "Race", "Class"];
+
+    /// <summary>Element types eligible for retraining and prereq-dependency scans.</summary>
+    private static readonly string[] RetrainableTypes =
+        ["Feat", "Class Feature", "Power", "Theme"];
+
     public RetrainingService(RulesDatabaseService db)
     {
         _db = db;
@@ -478,7 +489,7 @@ public sealed class RetrainingService
             if (!string.IsNullOrEmpty(record.Element.InternalId))
                 ids.Add(record.Element.InternalId);
         }
-        foreach (var type in new[] { "Feat", "Class Feature", "Power", "Theme", "Race", "Class" })
+        foreach (var type in ActiveElementTypes)
         {
             foreach (var el in session.GetAllElementsOfType(type))
             {
@@ -520,7 +531,7 @@ public sealed class RetrainingService
         // Build a Name → InternalId lookup for retrainable elements so we can
         // resolve "Feat: Toughness" prereq strings back to ids.
         var nameToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var type in new[] { "Feat", "Class Feature", "Power", "Theme" })
+        foreach (var type in RetrainableTypes)
         {
             foreach (var el in session.GetAllElementsOfType(type))
             {
@@ -529,7 +540,7 @@ public sealed class RetrainingService
             }
         }
 
-        foreach (var type in new[] { "Feat", "Class Feature", "Power", "Theme" })
+        foreach (var type in RetrainableTypes)
         {
             foreach (var el in session.GetAllElementsOfType(type))
             {
@@ -571,7 +582,7 @@ public sealed class RetrainingService
         // through the engine's Build pass; if a retrain produces an illegal
         // pick, the engine emits an UnresolvedElement.
         var activeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var type in new[] { "Feat", "Class Feature", "Power", "Theme", "Race", "Class" })
+        foreach (var type in ActiveElementTypes)
         {
             foreach (var el in session.GetAllElementsOfType(type))
             {

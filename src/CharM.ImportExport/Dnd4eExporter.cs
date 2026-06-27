@@ -336,8 +336,7 @@ public static partial class Dnd4eExporter
 
             var weaponCandidates = allLoot
                 .Where(loot => IsWeaponOrImplementBase(loot.Base))
-                .GroupBy(loot => loot.CompositeKey, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
+                .DistinctBy(loot => loot.CompositeKey, StringComparer.OrdinalIgnoreCase)
                 .Concat(BuildKiFocusPairs(session))
                 .Select((loot, idx) => (loot, idx))
                 .OrderBy(x => x, new OcbWeaponSortComparer(equippedKeys, slotByKey))

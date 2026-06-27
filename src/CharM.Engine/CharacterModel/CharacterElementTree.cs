@@ -151,8 +151,7 @@ public sealed class CharacterElementTree
         if (ElementResolver is null) return null;
 
         var power = Root.GetAllDescendants()
-            .Where(node => node.IsActive && node.RulesElement is not null)
-            .FirstOrDefault(IsDilettantePower)
+            .FirstOrDefault(node => node.IsActive && node.RulesElement is not null && IsDilettantePower(node))
             ?.RulesElement;
         if (power is null) return null;
 
