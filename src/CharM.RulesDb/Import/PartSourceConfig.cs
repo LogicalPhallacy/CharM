@@ -27,7 +27,7 @@ public sealed class PartSourceConfig
     /// Folders in the repo (GitHub) to enumerate for parts. Defaults to the
     /// cbparts layout. Each maps to a category bucket of the same name.
     /// </summary>
-    public List<string> Folders { get; set; } = ["sorted", "UnearthedArcana", "Homebrew", "3rdParty"];
+    public List<string> Folders { get; set; } = [.. RulePartCategories.ContentFolders];
 
     // ---- CBLoader host ----
     /// <summary>Base URL exposing versions2.txt + part files (e.g. https://cbloader.vorpald20.com/).</summary>

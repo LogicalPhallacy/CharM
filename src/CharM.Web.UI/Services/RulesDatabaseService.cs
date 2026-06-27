@@ -368,7 +368,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         {
             var category = GetElementProvenanceCategory(element.InternalId);
             if (category is null) return null; // base-only → fall back to heuristic
-            return string.Equals(category, "Homebrew", StringComparison.OrdinalIgnoreCase)
+            return string.Equals(category, RulePartCategories.Homebrew, StringComparison.OrdinalIgnoreCase)
                 ? LegalitySource.HouseRule
                 : LegalitySource.PartFile;
         };

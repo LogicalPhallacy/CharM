@@ -167,6 +167,21 @@ public static partial class PowerStatsBuilder
         // dedupe here. Key on InternalId (with a Name fallback for
         // synthesized elements that lack one), preserving first-occurrence
         // order for stable diffs.
+        var buildContext = new PowerStatsBuildContext(
+            Stats: stats,
+            WeaponCandidates: weaponCandidates,
+            Snapshot: snapshot,
+            CharacterLevel: characterLevel,
+            SourceNameResolver: sourceNameResolver,
+            HealingSourceNameResolver: healingSourceNameResolver,
+            SourceElementResolver: sourceElementResolver,
+            WieldedLootKeys: wieldedLootKeys,
+            CharacterHasMultiWieldingState: characterHasMultiWieldingState,
+            EquippedCompositeKeyCounts: equippedCompositeKeyCounts,
+            HasDualImplementSpellcaster: hasDualImplementSpellcaster,
+            TextStrings: textStrings,
+            PrecomputedBeastAttackBonus: precomputedBeastAttackBonus);
+
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var node in snapshot.Builder.ElementTree.Root.GetAllDescendants())
         {
@@ -186,10 +201,7 @@ public static partial class PowerStatsBuilder
             effectivePower = MarkActiveNamedOptionFields(effectivePower, activeElementNames);
             if (PowerIsDilettanteChoice(node))
                 effectivePower = WithSyntheticCategory(effectivePower, "dilettante");
-            entries.Add(BuildEntry(effectivePower, stats, weaponCandidates, snapshot, characterLevel,
-                sourceNameResolver, healingSourceNameResolver, sourceElementResolver,
-                wieldedLootKeys, characterHasMultiWieldingState, equippedCompositeKeyCounts,
-                hasDualImplementSpellcaster, textStrings, precomputedBeastAttackBonus));
+            entries.Add(BuildEntry(effectivePower, buildContext));
         }
 
         // Cascaded grants from equipped magic items (Harper Pin → Lliira's
@@ -207,10 +219,7 @@ public static partial class PowerStatsBuilder
                 if (!seen.Add(key)) continue;
                 var effectivePower = ResolveEffectivePower(re, sourceElementResolver);
                 effectivePower = ApplyOverlayFields(effectivePower, snapshot.Builder.Overlay, sourceMetadata);
-                entries.Add(BuildEntry(effectivePower, stats, weaponCandidates, snapshot, characterLevel,
-                    sourceNameResolver, healingSourceNameResolver, sourceElementResolver,
-                    wieldedLootKeys, characterHasMultiWieldingState, equippedCompositeKeyCounts,
-                    hasDualImplementSpellcaster, textStrings, precomputedBeastAttackBonus));
+                entries.Add(BuildEntry(effectivePower, buildContext));
             }
         }
 
@@ -265,17 +274,7 @@ public static partial class PowerStatsBuilder
         if (fields is null)
             return element;
 
-        return new RulesElement
-        {
-            InternalId = element.InternalId,
-            Name = element.Name,
-            Type = element.Type,
-            Source = element.Source,
-            Prereqs = element.Prereqs,
-            Rules = element.Rules,
-            Fields = fields,
-            Categories = [.. element.Categories],
-        };
+        return RulesElementProjection.WithFields(element, fields, [.. element.Categories]);
     }
 
     private static bool PowerIsDilettanteChoice(Engine.CharacterModel.CharacterElement node)
@@ -297,17 +296,10 @@ public static partial class PowerStatsBuilder
         if (power.Categories.Any(c => string.Equals(c, category, StringComparison.OrdinalIgnoreCase)))
             return power;
 
-        return new RulesElement
-        {
-            InternalId = power.InternalId,
-            Name = power.Name,
-            Type = power.Type,
-            Source = power.Source,
-            Prereqs = power.Prereqs,
-            Rules = power.Rules,
-            Fields = new Dictionary<string, string>(power.Fields, StringComparer.OrdinalIgnoreCase),
-            Categories = [.. power.Categories, category],
-        };
+        return RulesElementProjection.WithFields(
+            power,
+            new Dictionary<string, string>(power.Fields, StringComparer.OrdinalIgnoreCase),
+            [.. power.Categories, category]);
     }
 
     private static RulesElement MarkActiveNamedOptionFields(RulesElement power, IReadOnlySet<string> activeElementNames)
@@ -325,35 +317,26 @@ public static partial class PowerStatsBuilder
             ["_Active Option Fields"] = string.Join("\n", activeOptionFields)
         };
 
-        return new RulesElement
-        {
-            InternalId = power.InternalId,
-            Name = power.Name,
-            Type = power.Type,
-            Source = power.Source,
-            Prereqs = power.Prereqs,
-            Rules = power.Rules,
-            Fields = fields,
-            Categories = [.. power.Categories],
-        };
+        return RulesElementProjection.WithFields(power, fields, [.. power.Categories]);
     }
 
     private static PowerStatEntry BuildEntry(
         RulesElement power,
-        Engine.Evaluation.StatBlock stats,
-        IReadOnlyList<LootItem> weaponCandidates,
-        Engine.Creation.CharacterSnapshot snapshot,
-        int characterLevel,
-        Func<string, string?> sourceNameResolver,
-        Func<string, string?> healingSourceNameResolver,
-        Func<string, RulesElement?> sourceElementResolver,
-        IReadOnlySet<string>? wieldedLootKeys = null,
-        bool characterHasMultiWieldingState = false,
-        IReadOnlyDictionary<string, int>? equippedCompositeKeyCounts = null,
-        bool hasDualImplementSpellcaster = false,
-        IReadOnlyDictionary<string, string>? textStrings = null,
-        int? precomputedBeastAttackBonus = null)
+        PowerStatsBuildContext ctx)
     {
+        var stats = ctx.Stats;
+        var weaponCandidates = ctx.WeaponCandidates;
+        var snapshot = ctx.Snapshot;
+        var characterLevel = ctx.CharacterLevel;
+        var sourceNameResolver = ctx.SourceNameResolver;
+        var healingSourceNameResolver = ctx.HealingSourceNameResolver;
+        var sourceElementResolver = ctx.SourceElementResolver;
+        var wieldedLootKeys = ctx.WieldedLootKeys;
+        var characterHasMultiWieldingState = ctx.CharacterHasMultiWieldingState;
+        var equippedCompositeKeyCounts = ctx.EquippedCompositeKeyCounts;
+        var hasDualImplementSpellcaster = ctx.HasDualImplementSpellcaster;
+        var textStrings = ctx.TextStrings;
+        var precomputedBeastAttackBonus = ctx.PrecomputedBeastAttackBonus;
         // OCB emits exactly two <specific> children per <Power>: Power Usage
         // and Action Type. The 9-field list we previously emitted was wrong
         // and floods the diff with extras for every power on every character.
@@ -523,9 +506,7 @@ public static partial class PowerStatsBuilder
             var builtWeaponBlocks = new List<(LootItem Loot, int? DualImplementOtherEnhancementBonus, PowerStatWeapon Block)>();
             foreach (var (loot, dualImplementOtherEnhancementBonus) in validWeaponCandidates)
             {
-                var block = BuildWeaponBlock(power, snapshot, stats, loot, snapshot.Builder.Overlay, characterLevel,
-                    sourceNameResolver, healingSourceNameResolver, sourceElementResolver, dualImplementOtherEnhancementBonus, textStrings,
-                    precomputedBeastAttackBonus: precomputedBeastAttackBonus);
+                var block = BuildWeaponBlock(power, loot, ctx, dualImplementOtherEnhancementBonus);
                 if (HasMeaningfulStats(block, power))
                     builtWeaponBlocks.Add((loot, dualImplementOtherEnhancementBonus, block));
             }
@@ -534,17 +515,14 @@ public static partial class PowerStatsBuilder
             foreach (var (loot, dualImplementOtherEnhancementBonus, block) in builtWeaponBlocks)
             {
                 entry.Weapons.Add(displayZeroUnselectedModeVariant
-                    ? BuildWeaponBlock(power, snapshot, stats, loot, snapshot.Builder.Overlay, characterLevel,
-                        sourceNameResolver, healingSourceNameResolver, sourceElementResolver, dualImplementOtherEnhancementBonus, textStrings,
-                        displayZeroUnselectedModeVariant,
-                        precomputedBeastAttackBonus)
+                    ? BuildWeaponBlock(power, loot, ctx, dualImplementOtherEnhancementBonus, displayZeroUnselectedModeVariant)
                     : block);
             }
         }
         if (PowerFieldParser.AllowUnarmed(power)
             && !IsVerboseUnsatisfiableRequirement(power)
             && !isHardcodedNoWeapons)
-            TryAddWeaponBlock(entry, power, snapshot, stats, null, snapshot.Builder.Overlay, characterLevel, sourceNameResolver, healingSourceNameResolver, sourceElementResolver, textStrings: textStrings, precomputedBeastAttackBonus: precomputedBeastAttackBonus);
+            TryAddWeaponBlock(entry, power, null, ctx);
 
         return entry;
     }
@@ -819,17 +797,7 @@ public static partial class PowerStatsBuilder
             if (fields is null)
                 return element;
 
-            return new RulesElement
-            {
-                InternalId = element.InternalId,
-                Name = element.Name,
-                Type = element.Type,
-                Source = element.Source,
-                Fields = fields,
-                Prereqs = element.Prereqs,
-                Rules = element.Rules,
-                Categories = element.Categories,
-            };
+            return RulesElementProjection.WithFields(element, fields);
         }
     }
 
@@ -848,22 +816,12 @@ public static partial class PowerStatsBuilder
     private static void TryAddWeaponBlock(
         PowerStatEntry entry,
         RulesElement power,
-        Engine.Creation.CharacterSnapshot snapshot,
-        Engine.Evaluation.StatBlock stats,
         LootItem? weaponLoot,
-        Engine.Evaluation.ModifyOverlay overlay,
-        int characterLevel,
-        Func<string, string?> sourceNameResolver,
-        Func<string, string?> healingSourceNameResolver,
-        Func<string, RulesElement?> sourceElementResolver,
+        PowerStatsBuildContext ctx,
         int? dualImplementOtherEnhancementBonus = null,
-        IReadOnlyDictionary<string, string>? textStrings = null,
-        bool displayZeroUnselectedModeVariant = false,
-        int? precomputedBeastAttackBonus = null)
+        bool displayZeroUnselectedModeVariant = false)
     {
-        var block = BuildWeaponBlock(power, snapshot, stats, weaponLoot, overlay, characterLevel, sourceNameResolver,
-            healingSourceNameResolver, sourceElementResolver, dualImplementOtherEnhancementBonus, textStrings, displayZeroUnselectedModeVariant,
-            precomputedBeastAttackBonus);
+        var block = BuildWeaponBlock(power, weaponLoot, ctx, dualImplementOtherEnhancementBonus, displayZeroUnselectedModeVariant);
         if (HasMeaningfulStats(block, power))
             entry.Weapons.Add(block);
     }
@@ -2228,19 +2186,20 @@ public static partial class PowerStatsBuilder
 
     private static PowerStatWeapon BuildWeaponBlock(
         RulesElement power,
-        Engine.Creation.CharacterSnapshot snapshot,
-        Engine.Evaluation.StatBlock stats,
         LootItem? weaponLoot,
-        Engine.Evaluation.ModifyOverlay overlay,
-        int characterLevel,
-        Func<string, string?> sourceNameResolver,
-        Func<string, string?> healingSourceNameResolver,
-        Func<string, RulesElement?> sourceElementResolver,
+        PowerStatsBuildContext ctx,
         int? dualImplementOtherEnhancementBonus = null,
-        IReadOnlyDictionary<string, string>? textStrings = null,
-        bool displayZeroUnselectedModeVariant = false,
-        int? precomputedBeastAttackBonus = null)
+        bool displayZeroUnselectedModeVariant = false)
     {
+        var snapshot = ctx.Snapshot;
+        var stats = ctx.Stats;
+        var overlay = ctx.Overlay;
+        var characterLevel = ctx.CharacterLevel;
+        var sourceNameResolver = ctx.SourceNameResolver;
+        var healingSourceNameResolver = ctx.HealingSourceNameResolver;
+        var sourceElementResolver = ctx.SourceElementResolver;
+        var textStrings = ctx.TextStrings;
+        var precomputedBeastAttackBonus = ctx.PrecomputedBeastAttackBonus;
         // Merge fields from Base + Enchantment (+ Augment) so the calculator
         // sees the full picture: Base contributes Damage / Proficiency Bonus /
         // Group / Properties; Enchantment contributes Enhancement; Augment
@@ -2254,17 +2213,7 @@ public static partial class PowerStatsBuilder
             {
                 ["_Versatile Used Two-Handed"] = "1"
             };
-            weaponEl = new RulesElement
-            {
-                InternalId = weaponEl.InternalId,
-                Name = weaponEl.Name,
-                Type = weaponEl.Type,
-                Source = weaponEl.Source,
-                Fields = fields,
-                Prereqs = weaponEl.Prereqs,
-                Rules = weaponEl.Rules,
-                Categories = [.. weaponEl.Categories],
-            };
+            weaponEl = RulesElementProjection.WithFields(weaponEl, fields, [.. weaponEl.Categories]);
         }
         if (weaponEl is not null && dualImplementOtherEnhancementBonus is { } otherEnhancement && otherEnhancement != 0)
         {
@@ -2272,17 +2221,7 @@ public static partial class PowerStatsBuilder
             {
                 ["_Dual Implement Spellcaster Other Enhancement"] = otherEnhancement.ToString()
             };
-            weaponEl = new RulesElement
-            {
-                InternalId = weaponEl.InternalId,
-                Name = weaponEl.Name,
-                Type = weaponEl.Type,
-                Source = weaponEl.Source,
-                Fields = fields,
-                Prereqs = weaponEl.Prereqs,
-                Rules = weaponEl.Rules,
-                Categories = [.. weaponEl.Categories],
-            };
+            weaponEl = RulesElementProjection.WithFields(weaponEl, fields, [.. weaponEl.Categories]);
         }
         string? ResolveSourceName(string sourceId)
         {
@@ -2475,17 +2414,7 @@ public static partial class PowerStatsBuilder
         }
         Overlay(loot.Enchantment);
         Overlay(loot.Augment);
-        return new RulesElement
-        {
-            InternalId = loot.Base.InternalId,
-            Name = loot.Base.Name,
-            Type = loot.Base.Type,
-            Source = loot.Base.Source,
-            Fields = merged,
-            Prereqs = loot.Base.Prereqs,
-            Rules = loot.Base.Rules,
-            Categories = loot.Base.Categories,
-        };
+        return RulesElementProjection.WithFields(loot.Base, merged);
 
         static RulesElement? ResolveAugmentFromXml(
             string? augmentXml,

@@ -50,12 +50,10 @@ public sealed class PartManifest
 /// </summary>
 public sealed class RulesDbLayerStore
 {
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
-
     // Categories treated as "heavy/stable" — folded into the checkpoint so that
     // toggling a light overlay never re-merges the multi-MB official item parts.
     private static readonly HashSet<string> HeavyCategories =
-        new(StringComparer.OrdinalIgnoreCase) { "base", "sorted" };
+        new(RulePartCategories.HeavyCategories, StringComparer.OrdinalIgnoreCase);
 
     private readonly string _archiveDir;
     private readonly string _baseSnapshotPath;
@@ -126,14 +124,14 @@ public sealed class RulesDbLayerStore
     {
         if (!File.Exists(_manifestPath))
             throw new InvalidOperationException("Layer store is not initialized.");
-        return JsonSerializer.Deserialize<PartManifest>(File.ReadAllText(_manifestPath), JsonOpts)
+        return JsonSerializer.Deserialize(File.ReadAllText(_manifestPath), RulesDbJsonContext.Default.PartManifest)
             ?? new PartManifest();
     }
 
     public void SaveManifest(PartManifest manifest)
     {
         Directory.CreateDirectory(_archiveDir);
-        File.WriteAllText(_manifestPath, JsonSerializer.Serialize(manifest, JsonOpts));
+        File.WriteAllText(_manifestPath, JsonSerializer.Serialize(manifest, RulesDbJsonContext.Default.PartManifest));
     }
 
     /// <summary>Flip a part's enabled flag in the manifest (does not rebuild).</summary>

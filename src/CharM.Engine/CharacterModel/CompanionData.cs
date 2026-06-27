@@ -13,7 +13,7 @@ namespace CharM.Engine.CharacterModel;
 /// aggregated <c>Companion.*</c> ability stats, and the OCB
 /// <c>_COMPANION_NAME</c> / <c>_COMPANION_APPEARANCE</c> text strings.
 /// </summary>
-public sealed record CompanionData(
+public sealed partial record CompanionData(
     string Category,
     string? Name,
     string? Appearance,
@@ -646,7 +646,7 @@ public sealed record CompanionData(
         if (string.IsNullOrWhiteSpace(source))
             return abilities;
 
-        foreach (Match m in AbilityPattern.Matches(source))
+        foreach (Match m in AbilityPattern().Matches(source))
         {
             string abbr = m.Groups[1].Value;
             if (int.TryParse(m.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int score))
@@ -805,7 +805,7 @@ public sealed record CompanionData(
             var line = rawLine.Trim();
             if (string.IsNullOrEmpty(line)) continue;
 
-            var matches = AbilityPattern.Matches(line);
+            var matches = AbilityPattern().Matches(line);
             if (matches.Count > 0)
             {
                 foreach (Match m in matches)
@@ -978,41 +978,33 @@ public sealed record CompanionData(
         _ => abbr,
     };
 
-    private static readonly Regex AbilityPattern = new(
-        @"\b(Str|Con|Dex|Int|Wis|Cha):?\s+(\d+)\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"\b(Str|Con|Dex|Int|Wis|Cha):?\s+(\d+)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex AbilityPattern();
 
     /// <summary>Compute the ability modifier (4e: floor((score - 10) / 2)).</summary>
     public int Mod(int score) => (score - 10) / 2;
 
     // Patterns for resolving companion template text
-    private static readonly Regex YourLevelPlusN = new(
-        @"your level\s*\+\s*(\d+)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"your level\s*\+\s*(\d+)", RegexOptions.IgnoreCase)]
+    private static partial Regex YourLevelPlusN();
 
-    private static readonly Regex YourLevelBare = new(
-        @"\byour level\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"\byour level\b", RegexOptions.IgnoreCase)]
+    private static partial Regex YourLevelBare();
 
-    private static readonly Regex YourAbilityModifier = new(
-        @"your (Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) modifier",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"your (Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) modifier", RegexOptions.IgnoreCase)]
+    private static partial Regex YourAbilityModifier();
 
-    private static readonly Regex YourHighestAbilityModifier = new(
-        @"your highest ability modifier",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"your highest ability modifier", RegexOptions.IgnoreCase)]
+    private static partial Regex YourHighestAbilityModifier();
 
-    private static readonly Regex OneHalfYourLevel = new(
-        @"one-half your level",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"one-half your level", RegexOptions.IgnoreCase)]
+    private static partial Regex OneHalfYourLevel();
 
-    private static readonly Regex EqualToYoursPlusN = new(
-        @"[Ee]qual to yours\s*\+\s*(\d+)",
-        RegexOptions.Compiled);
+    [GeneratedRegex(@"[Ee]qual to yours\s*\+\s*(\d+)")]
+    private static partial Regex EqualToYoursPlusN();
 
-    private static readonly Regex EqualToYours = new(
-        @"[Ee]qual to yours",
-        RegexOptions.Compiled);
+    [GeneratedRegex(@"[Ee]qual to yours")]
+    private static partial Regex EqualToYours();
 
     /// <summary>
     /// Resolve template expressions in companion text against the
@@ -1036,20 +1028,20 @@ public sealed record CompanionData(
         Dictionary<string, int> characterAbilities)
     {
         // "your level + N" → computed
-        var result = YourLevelPlusN.Replace(text, m =>
+        var result = YourLevelPlusN().Replace(text, m =>
         {
             int bonus = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
             return $"{characterLevel + bonus}";
         });
 
         // "one-half your level" → floor(level / 2)
-        result = OneHalfYourLevel.Replace(result, _ => $"{characterLevel / 2}");
+        result = OneHalfYourLevel().Replace(result, _ => $"{characterLevel / 2}");
 
         // "your level" (bare, after + N already replaced) → level
-        result = YourLevelBare.Replace(result, $"{characterLevel}");
+        result = YourLevelBare().Replace(result, $"{characterLevel}");
 
         // "your Wisdom modifier" etc. → character's mod
-        result = YourAbilityModifier.Replace(result, m =>
+        result = YourAbilityModifier().Replace(result, m =>
         {
             string abilityName = m.Groups[1].Value;
             int score = characterAbilities.GetValueOrDefault(abilityName, 10);
@@ -1058,7 +1050,7 @@ public sealed record CompanionData(
         });
 
         // "your highest ability modifier" → max of character's mods
-        result = YourHighestAbilityModifier.Replace(result, _ =>
+        result = YourHighestAbilityModifier().Replace(result, _ =>
         {
             int maxMod = characterAbilities.Count > 0
                 ? characterAbilities.Values.Max(s => (s - 10) / 2)
@@ -1078,14 +1070,14 @@ public sealed record CompanionData(
         if (string.IsNullOrWhiteSpace(text) || characterStatValue is null)
             return text;
 
-        var plusMatch = EqualToYoursPlusN.Match(text);
+        var plusMatch = EqualToYoursPlusN().Match(text);
         if (plusMatch.Success)
         {
             int bonus = int.Parse(plusMatch.Groups[1].Value, CultureInfo.InvariantCulture);
             return $"{characterStatValue.Value + bonus}";
         }
 
-        if (EqualToYours.IsMatch(text))
+        if (EqualToYours().IsMatch(text))
             return $"{characterStatValue.Value}";
 
         return text;

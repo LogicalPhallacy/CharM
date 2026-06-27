@@ -97,13 +97,7 @@ public sealed class CbloaderHostPartSource : IPartSource
             {
                 var xml = await _http.GetStringAsync(new Uri(_base, indexName), ct);
                 var doc = XDocument.Parse(xml);
-                foreach (var part in doc.Descendants("Part"))
-                {
-                    string? filename = part.Element("Filename")?.Value?.Trim();
-                    string? address = part.Element("PartAddress")?.Value?.Trim();
-                    if (!string.IsNullOrWhiteSpace(filename) && !string.IsNullOrWhiteSpace(address))
-                        result.Add((filename, address));
-                }
+                result.AddRange(PartIndexReader.ReadPartEntries(doc));
                 if (result.Count > 0) return result;
             }
             catch (HttpRequestException) { /* try next index name */ }

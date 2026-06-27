@@ -11,8 +11,6 @@ namespace CharM.Web.Services;
 /// </summary>
 public sealed class PartPreferencesStore
 {
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
-
     private readonly string _sourceConfigPath;
     private readonly string _enabledSourcesPath;
 
@@ -33,7 +31,7 @@ public sealed class PartPreferencesStore
         try
         {
             return File.Exists(_sourceConfigPath)
-                ? JsonSerializer.Deserialize<PartSourceConfig>(File.ReadAllText(_sourceConfigPath), JsonOpts)
+                ? JsonSerializer.Deserialize(File.ReadAllText(_sourceConfigPath), RulesDbJsonContext.Default.PartSourceConfig)
                 : null;
         }
         catch { return null; }
@@ -41,7 +39,7 @@ public sealed class PartPreferencesStore
 
     public void SaveSourceConfig(PartSourceConfig config)
     {
-        try { File.WriteAllText(_sourceConfigPath, JsonSerializer.Serialize(config, JsonOpts)); }
+        try { File.WriteAllText(_sourceConfigPath, JsonSerializer.Serialize(config, RulesDbJsonContext.Default.PartSourceConfig)); }
         catch { /* best-effort */ }
     }
 
@@ -50,7 +48,7 @@ public sealed class PartPreferencesStore
         try
         {
             if (!File.Exists(_enabledSourcesPath)) return null;
-            var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(_enabledSourcesPath));
+            var list = JsonSerializer.Deserialize(File.ReadAllText(_enabledSourcesPath), RulesDbJsonContext.Default.ListString);
             return list is { Count: > 0 }
                 ? new HashSet<string>(list, StringComparer.OrdinalIgnoreCase)
                 : null;
@@ -67,7 +65,7 @@ public sealed class PartPreferencesStore
                 if (File.Exists(_enabledSourcesPath)) File.Delete(_enabledSourcesPath);
                 return;
             }
-            File.WriteAllText(_enabledSourcesPath, JsonSerializer.Serialize(sources.ToList(), JsonOpts));
+            File.WriteAllText(_enabledSourcesPath, JsonSerializer.Serialize(sources.ToList(), RulesDbJsonContext.Default.ListString));
         }
         catch { /* best-effort */ }
     }

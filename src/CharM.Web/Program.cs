@@ -19,23 +19,7 @@ builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions>(options =>
     options.MaximumReceiveMessageSize = 4L * 1024L * 1024L;
 });
 
-builder.Services.AddSingleton<RulesDatabaseService>();
-builder.Services.AddSingleton<PartManagementService>();
-builder.Services.AddSingleton<PartPreferencesStore>();
-builder.Services.AddSingleton<CharM.RulesDb.Storage.IRulesDatabase>(sp =>
-    sp.GetRequiredService<RulesDatabaseService>());
-
-// Character session — scoped per connection (one session per user tab)
-builder.Services.AddScoped<CharacterSessionService>();
-builder.Services.AddScoped<RetrainingService>();
-builder.Services.AddScoped<BrowserStorageService>();
-builder.Services.AddScoped<CharacterRestoreState>();
-builder.Services.AddScoped<PrintCardCollector>();
-builder.Services.AddScoped<DiceRoller>();
-builder.Services.AddScoped<DiceRollerUiService>();
-builder.Services.AddScoped<CharacterResourceTracker>();
-builder.Services.AddScoped<CalculationBreakdownService>();
-builder.Services.AddScoped<DisplaySettingsService>();
+builder.Services.AddCharmCoreServices();
 
 var app = builder.Build();
 

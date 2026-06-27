@@ -56,13 +56,8 @@ public static partial class PartMerger
         doc.Save(Path.Combine(destDirectory, "WotC.index"));
 
         List<Task> tasks = new();
-        foreach (var part in doc.Descendants("Part"))
+        foreach (var (filename, address) in PartIndexReader.ReadPartEntries(doc))
         {
-            string? filename = part.Element("Filename")?.Value?.Trim();
-            string? address = part.Element("PartAddress")?.Value.Trim();
-            if (string.IsNullOrWhiteSpace(filename) || string.IsNullOrWhiteSpace(address))
-                continue;
-
             var partUri = new Uri(indexUri, address);
             tasks.Add(DownloadPart(downloadClient, partUri, filename, destDirectory, progress));
         }
@@ -204,7 +199,7 @@ public static partial class PartMerger
     }
 
     private static readonly HashSet<string> KnownCategories =
-        new(StringComparer.OrdinalIgnoreCase) { "sorted", "UnearthedArcana", "Homebrew", "3rdParty" };
+        new(RulePartCategories.ContentFolders, StringComparer.OrdinalIgnoreCase);
 
     private static string? DeriveCategory(string partsDirectory)
     {
@@ -433,7 +428,13 @@ public static partial class PartMerger
         var result = new List<RuleDirective>();
         foreach (var d in directives)
         {
-            string key = JsonSerializer.Serialize(d, d.GetType(), jsonOptions);
+            // Use the generic overload so serialization routes through the
+            // registered RuleDirectiveJsonConverter (keyed on the base type) and
+            // produces the canonical $type-discriminated form. The runtime-type
+            // overload (d.GetType()) resolves a converter for the concrete
+            // subtype, finds none, and silently falls through to reflection —
+            // a different, trimming-unsafe shape.
+            string key = JsonSerializer.Serialize<RuleDirective>(d, jsonOptions);
             if (seen.Add(key))
                 result.Add(d);
         }
@@ -530,17 +531,18 @@ public static partial class PartMerger
     {
         foreach (var child in rulesEl.Elements())
         {
+            var node = new XElementRuleNode(child);
             RuleDirective? directive = child.Name.LocalName switch
             {
-                "statadd" => ParseStatAdd(child),
-                "grant" => ParseGrant(child),
-                "modify" => ParseModify(child),
+                "statadd" => RuleDirectiveParser.ParseStatAdd(node),
+                "grant" => RuleDirectiveParser.ParseGrant(node),
+                "modify" => RuleDirectiveParser.ParseModify(node),
                 "select" => ParseSelect(child),
-                "replace" => ParseReplace(child),
-                "drop" => ParseDrop(child),
-                "suggest" => ParseSuggest(child),
-                "textstring" => ParseTextString(child),
-                "statalias" => ParseStatAlias(child),
+                "replace" => RuleDirectiveParser.ParseReplace(node),
+                "drop" => RuleDirectiveParser.ParseDrop(node),
+                "suggest" => RuleDirectiveParser.ParseSuggest(node),
+                "textstring" => RuleDirectiveParser.ParseTextString(node),
+                "statalias" => RuleDirectiveParser.ParseStatAlias(node),
                 _ => null,
             };
             if (directive is not null)
@@ -639,78 +641,6 @@ public static partial class PartMerger
             Existing = ParseBool(Attr(el, "existing")),
             Default = Attr(el, "default"),
             Grant = Attr(el, "grant"),
-        };
-    }
-
-    private static ReplaceDirective ParseReplace(XElement el)
-    {
-        return new ReplaceDirective
-        {
-            Name = Attr(el, "name"),
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Multiclass = Attr(el, "multiclass"),
-            PowerSwap = Attr(el, "powerswap"),
-            PowerReplace = Attr(el, "power-replace"),
-            Optional = ParseBool(Attr(el, "optional")),
-            Requires = Attr(el, "requires"),
-        };
-    }
-
-    private static DropDirective ParseDrop(XElement el)
-    {
-        return new DropDirective
-        {
-            SelectSlot = Attr(el, "select"),
-            Name = Attr(el, "name"),
-            ElementType = Attr(el, "type"),
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
-        };
-    }
-
-    private static SuggestDirective? ParseSuggest(XElement el)
-    {
-        string? name = Attr(el, "name");
-        string? type = Attr(el, "type");
-        if (name is null || type is null) return null;
-
-        return new SuggestDirective
-        {
-            Name = name,
-            ElementType = type,
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
-        };
-    }
-
-    private static TextStringDirective? ParseTextString(XElement el)
-    {
-        string? name = Attr(el, "name");
-        string? value = Attr(el, "value");
-        if (name is null || value is null) return null;
-
-        return new TextStringDirective
-        {
-            Name = name,
-            Value = value,
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
-            Condition = Attr(el, "condition"),
-        };
-    }
-
-    private static StatAliasDirective? ParseStatAlias(XElement el)
-    {
-        string? name = Attr(el, "name");
-        string? alias = Attr(el, "alias");
-        if (name is null || alias is null) return null;
-
-        return new StatAliasDirective
-        {
-            Name = name,
-            Alias = alias,
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
         };
     }
 

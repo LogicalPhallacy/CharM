@@ -729,51 +729,12 @@ else
 
                     @{
                         // companionData and miniSheetAnchors were computed at the
-                        // top of the @else block; reuse them here.
-                        var renderedAttackCards = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        var companionGroups = new List<(CompanionData? Mini, PowerDisplayCard? Card, string? NameOverride)>();
-                        foreach (var beast in companionData)
-                        {
-                            companionGroups.Add((beast, null, null));
-                            if (beast.IsMinion || beast.IsSummon) continue;
-
-                            // Associate-backed companions (Living Zephyr etc.)
-                            // store their actions in the rules DB fields, which
-                            // ParseExtraPowers already surfaced on the mini-sheet.
-                            // The paired Power element is a companion stat block
-                            // with no standard power-card content (Hit/Effect/
-                            // Attack Type) — rendering it produces an empty card.
-                            // Skip the paired card when the mini-sheet already
-                            // carries the content via ExtraPowers.
-                            if (beast.ExtraPowers.Count > 0)
-                            {
-                                // Still mark the anchor as rendered so it doesn't
-                                // show up in the unpaired-cards list.
-                                if (beast.AnchorPowerInternalId is not null)
-                                    renderedAttackCards.Add(beast.AnchorPowerInternalId);
-                                continue;
-                            }
-
-                            var attackCard = companionCards.FirstOrDefault(c =>
-                                beast.AnchorPowerInternalId is not null
-                                && string.Equals(c.InternalId, beast.AnchorPowerInternalId, StringComparison.OrdinalIgnoreCase));
-                            if (attackCard is not null)
-                            {
-                                // Resolve "DISPLAYNAME" placeholder (anchor power stored in char file
-                                // with a template name that didn't get substituted in the DB).
-                                string? nameOverride = attackCard.Name.Equals("DISPLAYNAME", StringComparison.OrdinalIgnoreCase)
-                                    ? $"Companion: {beast.Category} Basic Attack"
-                                    : attackCard.Name.StartsWith("Companion:", StringComparison.OrdinalIgnoreCase)
-                                        ? $"{attackCard.Name} Basic Attack"
-                                        : null;
-                                companionGroups.Add((null, attackCard, nameOverride));
-                                renderedAttackCards.Add(attackCard.InternalId);
-                            }
-                        }
-                        var unpairedCards = companionCards
-                            .Where(c => !renderedAttackCards.Contains(c.InternalId)
-                                && !miniSheetAnchors.Contains(c.InternalId))
-                            .ToList();
+                        // top of the @else block; reuse them here. Grouping logic
+                        // is shared with the print path via PowerCardAssembly.
+                        var companionLayout = PowerCardAssembly.BuildCompanionGroups(
+                            companionData, companionCards, miniSheetAnchors);
+                        var companionGroups = companionLayout.Groups;
+                        var unpairedCards = companionLayout.Unpaired;
                     }
                     @if (companionCards.Count > 0 || companionData.Count > 0)
                     {
@@ -1090,88 +1051,13 @@ else
         CharacterSession session,
         CharacterSnapshot? snapshot,
         IReadOnlyList<CharM.Serialization.PowerStatEntry> powerStats)
-    {
-        var stats = snapshot?.Builder.Stats;
-        var cantripIds = CollectCantripPowerIds(snapshot);
-
-        var powers = GetDisplayPowers(session, snapshot)
-            .Where(power => !PowerCardFactory.IsFamiliarCardPower(power))
-            .Where(power => !IsAugmentVariant(power));
-
-        return PowerCardFactory.BuildSessionCards(
-            powers,
-            stats,
-            powerStats,
-            session.IsHouseruledElement,
-            sectionOverride: power =>
-            {
-                if (!string.IsNullOrEmpty(power.InternalId)
-                    && cantripIds.Contains(power.InternalId))
-                {
-                    return PowerSectionKeys.Cantrip;
-                }
-
-                return null;
-            },
-            augmentVersions: GetAugmentVersions);
-    }
-
-    private IEnumerable<RulesElement> GetDisplayPowers(CharacterSession session, CharacterSnapshot? snapshot)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        if (snapshot is not null)
-        {
-            foreach (var node in snapshot.Builder.ElementTree.Root.GetAllDescendants())
-            {
-                if (node.RulesElement is not { } power) continue;
-                if (!power.Type.Equals("Power", StringComparison.OrdinalIgnoreCase)) continue;
-                if (IsAugmentVariant(power)) continue;
-                if (!string.IsNullOrEmpty(power.InternalId)
-                    && (snapshot.PowerStatsExcludedIds.Contains(power.InternalId)
-                        || snapshot.LevelNestedOnlyIds.Contains(power.InternalId)))
-                {
-                    continue;
-                }
-
-                var key = !string.IsNullOrEmpty(power.InternalId)
-                    ? power.InternalId
-                    : "name:" + power.Name;
-                if (!seen.Add(key)) continue;
-
-                yield return !string.IsNullOrEmpty(power.InternalId)
-                    ? SessionService.GetElementDetails(power.InternalId) ?? power
-                    : power;
-            }
-
-            yield break;
-        }
-
-        foreach (var power in session.GetAllElementsOfType("Power"))
-        {
-            if (IsAugmentVariant(power)) continue;
-            var key = !string.IsNullOrEmpty(power.InternalId)
-                ? power.InternalId
-                : "name:" + power.Name;
-            if (seen.Add(key))
-                yield return !string.IsNullOrEmpty(power.InternalId)
-                    ? SessionService.GetElementDetails(power.InternalId) ?? power
-                    : power;
-        }
-    }
+        => PowerCardAssembly.BuildPowerCards(SessionService, session, snapshot, powerStats);
 
     /// <summary>
     /// Detect companion/beast powers that should be grouped in a separate section.
     /// </summary>
     private static bool IsCompanionPowerCard(PowerDisplayCard card)
-        => card.InternalId.StartsWith("ID_TIV_COMPANION-", StringComparison.OrdinalIgnoreCase)
-        || card.InternalId.StartsWith("ID_TIV_COMPANION_", StringComparison.OrdinalIgnoreCase)
-        || card.InternalId.StartsWith("ID_TIV_ANIMAL_COMPANION-", StringComparison.OrdinalIgnoreCase)
-        || card.InternalId.StartsWith("ID_INTERNAL_POWER_BEAST_", StringComparison.OrdinalIgnoreCase)
-        || card.Name.StartsWith("Companion:", StringComparison.OrdinalIgnoreCase)
-        || card.Name.StartsWith("Animal Master's Companion:", StringComparison.OrdinalIgnoreCase)
-        || card.Name.StartsWith("Animal Companion:", StringComparison.OrdinalIgnoreCase)
-        || card.Name.StartsWith("Beast ", StringComparison.OrdinalIgnoreCase);
+        => PowerCardAssembly.IsCompanionPowerCard(card);
 
     /// <summary>
     /// Channel Divinity powers are tagged with a "Channel Divinity" field
@@ -1180,43 +1066,19 @@ else
     /// them in a dedicated section instead of mixing into Encounter Powers.
     /// </summary>
     private bool IsChannelDivinityCard(PowerDisplayCard card)
-    {
-        var detail = SessionService.GetElementDetails(card.InternalId);
-        return detail is not null && detail.Fields.ContainsKey("Channel Divinity");
-    }
+        => PowerCardAssembly.IsChannelDivinityCard(SessionService, card);
 
     /// <summary>
     /// Drop OCB-export placeholder companion entries and dedupe by anchor
     /// power id so display surfaces (mini-sheet + attack card grouping)
-    /// render one row per real companion. <see
-    /// cref="CharM.Engine.Creation.CharacterSession.GetCompanionData"/>
-    /// returns one entry per active "Companion" CharElement (one per level
-    /// for animal companions) because the .dnd4e writer needs that fan-out
-    /// for OCB &lt;Beast&gt; block parity. The UI must not honor that fan-out.
+    /// render one row per real companion.
     /// </summary>
     private static IReadOnlyList<CompanionData> DedupeCompanionDataForDisplay(IReadOnlyList<CompanionData> source)
-    {
-        if (source.Count == 0) return source;
-        var seenAnchors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<CompanionData>(source.Count);
-        foreach (var beast in source)
-        {
-            if (beast.IsPlaceholderForActiveBeast) continue;
-            if (!string.IsNullOrEmpty(beast.AnchorPowerInternalId)
-                && !seenAnchors.Add(beast.AnchorPowerInternalId))
-            {
-                continue;
-            }
-            result.Add(beast);
-        }
-        return result;
-    }
+        => PowerCardAssembly.DedupeCompanionDataForDisplay(source);
 
     /// <summary>Generic beast attack stub that's redundant when a Companion: X card is present.</summary>
     private static bool IsGenericBeastAttack(PowerDisplayCard card)
-        => card.InternalId.StartsWith("ID_INTERNAL_POWER_BEAST_", StringComparison.OrdinalIgnoreCase)
-        || card.Name.Equals("Beast Melee Basic Attack", StringComparison.OrdinalIgnoreCase)
-        || card.Name.Equals("Beast Ranged Basic Attack", StringComparison.OrdinalIgnoreCase);
+        => PowerCardAssembly.IsGenericBeastAttack(card);
 
     /// <summary>
     /// Wizard spellbook: how many daily/utility powers can be prepared per day.
@@ -1230,74 +1092,11 @@ else
         _ => 1,
     };
 
-    private IReadOnlyList<RulesElement> GetAugmentVersions(RulesElement power)
-    {
-        if (!power.Fields.TryGetValue("_AugmentVersions", out var raw) || string.IsNullOrWhiteSpace(raw))
-            return [];
-
-        var variants = new List<RulesElement>();
-        foreach (var id in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var variant = SessionService.GetElementDetails(id);
-            if (variant is not null)
-                variants.Add(variant);
-        }
-
-        return variants;
-    }
-
-    private static bool IsAugmentVariant(RulesElement power)
-        => power.Fields.ContainsKey("_AugmentParent");
-
     private static bool IsBasicPowerCard(PowerDisplayCard card)
-        => IsBasicPower(card.InternalId, card.Name);
-
-    private static bool IsBasicPower(string internalId, string name)
-    {
-        if (internalId.Equals("ID_INTERNAL_POWER_MELEE_BASIC_ATTACK", StringComparison.OrdinalIgnoreCase)
-            || internalId.Equals("ID_INTERNAL_POWER_RANGED_BASIC_ATTACK", StringComparison.OrdinalIgnoreCase)
-            || internalId.Equals("ID_INTERNAL_POWER_BULL_RUSH_ATTACK", StringComparison.OrdinalIgnoreCase)
-            || internalId.Equals("ID_INTERNAL_POWER_GRAB_ATTACK", StringComparison.OrdinalIgnoreCase)
-            || internalId.Equals("ID_INTERNAL_POWER_OPPORTUNITY_ATTACK", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return name.Equals("Melee Basic Attack", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Ranged Basic Attack", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Bull Rush Attack", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Grab Attack", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Opportunity Attack", StringComparison.OrdinalIgnoreCase);
-    }
+        => PowerCardAssembly.IsBasicPowerCard(card);
 
     private static IReadOnlyList<PowerDisplayCard> BuildMagicItemPowerCards(CharacterSession session)
-    {
-        var cards = new List<PowerDisplayCard>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        void AddLoot(LootItem loot)
-        {
-            foreach (var component in loot.Components())
-            {
-                if (!component.Type.Equals("Magic Item", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                foreach (var card in PowerCardFactory.BuildItemPowerCards(component, PowerSectionKeys.MagicItem))
-                {
-                    if (seen.Add(card.InternalId))
-                        cards.Add(card);
-                }
-            }
-        }
-
-        foreach (var loot in session.GetEquippedLoot().Values)
-            AddLoot(loot);
-
-        foreach (var inventoryItem in session.GetInventory().Where(item => item.Quantity >= 1))
-            AddLoot(inventoryItem.Item);
-
-        return cards;
-    }
+        => PowerCardAssembly.BuildMagicItemPowerCards(session);
 
     private void OpenSelectionModal(PendingChoice choice)
     {
@@ -1383,48 +1182,6 @@ else
         if (description.Contains("Encounter", StringComparison.OrdinalIgnoreCase))
             return PowerSectionKeys.Encounter;
         return PowerSectionKeys.AtWill;
-    }
-
-    /// <summary>
-    /// Walk the engine tree and return the InternalIds of every Power whose
-    /// owning select slot is a Class Feature with "Cantrip" in its name.
-    ///
-    /// <para>Six known cantrip-granting class features ship in the rules DB
-    /// (Arcanist Cantrips, Mage Cantrips, Bladesinger Cantrips, Hybrid
-    /// Cantrips, Sha'ir Cantrips, Witch Cantrips); rather than hard-coding
-    /// any of those internal-ids we use the live <see cref="CharacterElement.SlotOwnerInternalId"/>
-    /// which the wizard stamps on every picked element with the InternalId
-    /// of whatever opened its select slot. Cross-referenced category IDs
-    /// (a Wizard pick under <c>Arcanist Cantrips</c> resolves to candidates
-    /// in the <c>Mage Cantrips</c> category) don't break this signal because
-    /// the slot owner is always the actual feature that opened the slot,
-    /// regardless of which feature defines the candidate category.</para>
-    /// </summary>
-    private static HashSet<string> CollectCantripPowerIds(CharacterSnapshot? snapshot)
-    {
-        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (snapshot is null) return ids;
-
-        var featureNamesById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var node in snapshot.Builder.ElementTree.Root.GetAllDescendants())
-        {
-            if (node.RulesElement is not { } el) continue;
-            if (!el.Type.Equals("Class Feature", StringComparison.OrdinalIgnoreCase)) continue;
-            if (string.IsNullOrEmpty(el.InternalId)) continue;
-            featureNamesById[el.InternalId] = el.Name;
-        }
-
-        foreach (var node in snapshot.Builder.ElementTree.Root.GetAllDescendants())
-        {
-            if (node.RulesElement is not { } power) continue;
-            if (!power.Type.Equals("Power", StringComparison.OrdinalIgnoreCase)) continue;
-            if (string.IsNullOrEmpty(power.InternalId)) continue;
-            if (string.IsNullOrEmpty(node.SlotOwnerInternalId)) continue;
-            if (!featureNamesById.TryGetValue(node.SlotOwnerInternalId, out var ownerName)) continue;
-            if (ownerName.IndexOf("Cantrip", StringComparison.OrdinalIgnoreCase) < 0) continue;
-            ids.Add(power.InternalId);
-        }
-        return ids;
     }
 
     /// <summary>

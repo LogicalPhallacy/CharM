@@ -264,6 +264,18 @@ public static partial class Dnd4eImporter
                 tallyStandaloneCharelems.Add(kvp.Key);
         }
 
+        var alignCtx = new ImportAlignmentContext(
+            Session: session,
+            Database: database,
+            CharelemMap: charelemMap,
+            PreservedSwapTargets: preservedSwapTargets,
+            TallyReplaces: tallyReplaces,
+            TallyStandaloneCharelems: tallyStandaloneCharelems,
+            TallySwapperInternalIds: tallySwapperInternalIds,
+            Unresolved: unresolved,
+            DeferredPicks: deferredPicks,
+            TallyAcquisitionLevels: tallyAcquisitionLevels);
+
         foreach (var levelTree in snapshot.LevelTrees.OrderBy(l => l.Level))
         {
             // Each Level root carries a known internal id (ID_INTERNAL_LEVEL_N).
@@ -277,15 +289,7 @@ public static partial class Dnd4eImporter
                 levelTree.Root,
                 parentInternalId: levelOwner,
                 currentLevel: levelTree.Level,
-                session,
-                database,
-                charelemMap,
-                preservedSwapTargets,
-                tallyReplaces,
-                tallyStandaloneCharelems,
-                tallySwapperInternalIds,
-                unresolved,
-                deferredPicks, tallyAcquisitionLevels);
+                alignCtx);
         }
 
         // Retry user-picks that couldn't find a slot during the initial walk.
@@ -293,74 +297,18 @@ public static partial class Dnd4eImporter
         // only passes after a sibling subtree (e.g. the second hybrid class)
         // is processed. Loop until no further progress.
         ImportPerfTrace.Mark("deferred");
-        bool progress = true;
-        int safety = (deferredPicks.Count + 4) * 4;
-        while (progress && deferredPicks.Count > 0 && safety-- > 0)
-        {
-            progress = false;
-            for (int i = deferredPicks.Count - 1; i >= 0; i--)
-            {
-                var dp = deferredPicks[i];
-                var slot = FindNextPendingSlot(session, dp.ParentInternalId, dp.Element.Type);
-                if (slot is null) continue;
-
-                deferredPicks.RemoveAt(i);
-                session.MakeChoice(slot, dp.Element);
-                progress = true;
-
-                string nextParent = dp.Element.InternalId;
-                AlignChildren(
-                    dp.Node,
-                    parentInternalId: nextParent,
-                    currentLevel: dp.Level,
-                    session,
-                    database,
-                    charelemMap,
-                    preservedSwapTargets,
-                    tallyReplaces,
-                    tallyStandaloneCharelems,
-                    tallySwapperInternalIds,
-                    unresolved,
-                    deferredPicks, tallyAcquisitionLevels);
-            }
-        }
+        ProcessDeferredPicks(
+            alignCtx,
+            dp => FindNextPendingSlot(alignCtx.Session, dp.ParentInternalId, dp.Element.Type));
 
         // Fallback pass: for any deferred picks still unplaced, drop the
         // strict owner constraint and match by ElementType alone. The OCB
         // file occasionally serializes picks under the wrong parent context
         // (e.g. wrapped in an empty placeholder), but the type+pending-order
         // is enough to land them in the right slot. Loop until stable.
-        progress = true;
-        safety = (deferredPicks.Count + 4) * 4;
-        while (progress && deferredPicks.Count > 0 && safety-- > 0)
-        {
-            progress = false;
-            for (int i = deferredPicks.Count - 1; i >= 0; i--)
-            {
-                var dp = deferredPicks[i];
-                var slot = FindAnyPendingSlotByType(session, dp.Element.Type);
-                if (slot is null) continue;
-
-                deferredPicks.RemoveAt(i);
-                session.MakeChoice(slot, dp.Element);
-                progress = true;
-
-                string nextParent = dp.Element.InternalId;
-                AlignChildren(
-                    dp.Node,
-                    parentInternalId: nextParent,
-                    currentLevel: dp.Level,
-                    session,
-                    database,
-                    charelemMap,
-                    preservedSwapTargets,
-                    tallyReplaces,
-                    tallyStandaloneCharelems,
-                    tallySwapperInternalIds,
-                    unresolved,
-                    deferredPicks, tallyAcquisitionLevels);
-            }
-        }
+        ProcessDeferredPicks(
+            alignCtx,
+            dp => FindAnyPendingSlotByType(alignCtx.Session, dp.Element.Type));
 
         // Deity / Domain picks have no required rules slot for non-clerics
         // (and Domain doesn't legitimately appear at all outside of a
@@ -1154,21 +1102,54 @@ public static partial class Dnd4eImporter
     /// each non-grant child into the next compatible pending slot under
     /// <paramref name="parentInternalId"/>.
     /// </summary>
+    /// <summary>
+    /// Shared body for the two deferred-pick retry passes. Drains
+    /// <see cref="ImportAlignmentContext.DeferredPicks"/> by repeatedly asking
+    /// <paramref name="findSlot"/> for a landing slot, looping until a full
+    /// sweep makes no progress. The only thing that differed between the two
+    /// original copies was the slot finder (owner-scoped vs type-only).
+    /// </summary>
+    private static void ProcessDeferredPicks(
+        ImportAlignmentContext ctx,
+        Func<DeferredPick, ChoiceSlot?> findSlot)
+    {
+        var deferredPicks = ctx.DeferredPicks;
+        bool progress = true;
+        int safety = (deferredPicks.Count + 4) * 4;
+        while (progress && deferredPicks.Count > 0 && safety-- > 0)
+        {
+            progress = false;
+            for (int i = deferredPicks.Count - 1; i >= 0; i--)
+            {
+                var dp = deferredPicks[i];
+                var slot = findSlot(dp);
+                if (slot is null) continue;
+
+                deferredPicks.RemoveAt(i);
+                ctx.Session.MakeChoice(slot, dp.Element);
+                progress = true;
+
+                AlignChildren(dp.Node, dp.Element.InternalId, dp.Level, ctx);
+            }
+        }
+    }
+
     private static void AlignChildren(
         ImportedRulesElement parentNode,
         string? parentInternalId,
         int currentLevel,
-        CharacterSession session,
-        IRulesDatabase database,
-        IReadOnlyDictionary<string, (string InternalId, int Level)> charelemMap,
-        IReadOnlySet<string> preservedSwapTargets,
-        IReadOnlySet<(string NewId, string OldCharelem)> tallyReplaces,
-        IReadOnlySet<string> tallyStandaloneCharelems,
-        IReadOnlySet<string> tallySwapperInternalIds,
-        List<string> unresolved,
-        List<DeferredPick> deferredPicks,
-        IReadOnlyDictionary<string, int>? tallyAcquisitionLevels = null)
+        ImportAlignmentContext ctx)
     {
+        var session = ctx.Session;
+        var database = ctx.Database;
+        var charelemMap = ctx.CharelemMap;
+        var preservedSwapTargets = ctx.PreservedSwapTargets;
+        var tallyReplaces = ctx.TallyReplaces;
+        var tallyStandaloneCharelems = ctx.TallyStandaloneCharelems;
+        var tallySwapperInternalIds = ctx.TallySwapperInternalIds;
+        var unresolved = ctx.Unresolved;
+        var deferredPicks = ctx.DeferredPicks;
+        var tallyAcquisitionLevels = ctx.TallyAcquisitionLevels;
         // Per-owner ReplaceDirective level assignment: when the owner has
         // ReplaceDirectives (e.g. Psionic Augmentation (Hybrid) carries
         // ReplaceDirectives at Level=13/17/23/27 for the Hybrid swap chain),
@@ -1311,16 +1292,7 @@ public static partial class Dnd4eImporter
                     child,
                     parentInternalId: child.InternalId,
                     currentLevel: currentLevel,
-                    session,
-                    database,
-                    charelemMap,
-                    preservedSwapTargets,
-                    tallyReplaces,
-                    tallyStandaloneCharelems,
-                    tallySwapperInternalIds,
-                    unresolved,
-                    deferredPicks,
-                    tallyAcquisitionLevels);
+                    ctx);
                 continue;
             }
 
@@ -1415,7 +1387,7 @@ public static partial class Dnd4eImporter
                 ? child.InternalId
                 : parentInternalId;
 
-            AlignChildren(child, nextParent, currentLevel, session, database, charelemMap, preservedSwapTargets, tallyReplaces, tallyStandaloneCharelems, tallySwapperInternalIds, unresolved, deferredPicks, tallyAcquisitionLevels);
+            AlignChildren(child, nextParent, currentLevel, ctx);
         }
     }
 

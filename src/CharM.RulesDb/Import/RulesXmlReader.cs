@@ -200,84 +200,24 @@ public static partial class RulesXmlReader
             if (reader.NodeType != XmlNodeType.Element)
                 continue;
 
+            var node = new XmlReaderRuleNode(reader);
             RuleDirective? directive = reader.LocalName switch
             {
-                "statadd" => ParseStatAdd(reader),
-                "grant" => ParseGrant(reader),
-                "modify" => ParseModify(reader),
+                "statadd" => RuleDirectiveParser.ParseStatAdd(node),
+                "grant" => RuleDirectiveParser.ParseGrant(node),
+                "modify" => RuleDirectiveParser.ParseModify(node),
                 "select" => ParseSelect(reader),
-                "replace" => ParseReplace(reader),
-                "drop" => ParseDrop(reader),
-                "suggest" => ParseSuggest(reader),
-                "textstring" => ParseTextString(reader),
-                "statalias" => ParseStatAlias(reader),
+                "replace" => RuleDirectiveParser.ParseReplace(node),
+                "drop" => RuleDirectiveParser.ParseDrop(node),
+                "suggest" => RuleDirectiveParser.ParseSuggest(node),
+                "textstring" => RuleDirectiveParser.ParseTextString(node),
+                "statalias" => RuleDirectiveParser.ParseStatAlias(node),
                 _ => null,
             };
 
             if (directive is not null)
                 rules.Add(directive);
         }
-    }
-
-    private static StatAddDirective? ParseStatAdd(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? valueStr = reader.GetAttribute("value");
-
-        if (name is null || valueStr is null) return null;
-
-        return new StatAddDirective
-        {
-            Name = name,
-            Value = ValueExpression.Parse(valueStr),
-            BonusType = reader.GetAttribute("type"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-            Condition = reader.GetAttribute("condition"),
-            Wearing = reader.GetAttribute("wearing"),
-            NotWearing = reader.GetAttribute("not-wearing"),
-            Zero = ParseBool(reader.GetAttribute("zero")),
-            NonZero = ParseBool(reader.GetAttribute("non-zero")),
-            HalfPoint = ParseBool(reader.GetAttribute("half-point")),
-            StatMin = reader.GetAttribute("statmin"),
-        };
-    }
-
-    private static GrantDirective? ParseGrant(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? type = reader.GetAttribute("type");
-
-        if (name is null || type is null) return null;
-
-        return new GrantDirective
-        {
-            Name = name,
-            ElementType = type,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static ModifyDirective? ParseModify(XmlReader reader)
-    {
-        // Field attribute is case-insensitive: both "Field" and "field" are used
-        string? field = reader.GetAttribute("Field") ?? reader.GetAttribute("field");
-        if (field is null) return null;
-
-        return new ModifyDirective
-        {
-            Field = field,
-            Name = reader.GetAttribute("name"),
-            ElementType = reader.GetAttribute("type"),
-            Value = reader.GetAttribute("value"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-            ListAddition = reader.GetAttribute("list-addition"),
-            SelectSlot = reader.GetAttribute("select"),
-            Wearing = reader.GetAttribute("wearing"),
-            DieIncrease = ParseIntOrNull(reader.GetAttribute("die-increase")),
-        };
     }
 
     private static SelectDirective? ParseSelect(XmlReader reader)
@@ -347,81 +287,6 @@ public static partial class RulesXmlReader
             Existing = existing,
             Default = defaultAttr,
             Grant = grant,
-        };
-    }
-
-    private static ReplaceDirective ParseReplace(XmlReader reader)
-    {
-        return new ReplaceDirective
-        {
-            Name = reader.GetAttribute("name"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Multiclass = reader.GetAttribute("multiclass"),
-            PowerSwap = reader.GetAttribute("powerswap"),
-            PowerReplace = reader.GetAttribute("power-replace"),
-            Optional = ParseBool(reader.GetAttribute("optional")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static DropDirective ParseDrop(XmlReader reader)
-    {
-        return new DropDirective
-        {
-            SelectSlot = reader.GetAttribute("select"),
-            Name = reader.GetAttribute("name"),
-            ElementType = reader.GetAttribute("type"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static SuggestDirective?ParseSuggest(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? type = reader.GetAttribute("type");
-
-        if (name is null || type is null) return null;
-
-        return new SuggestDirective
-        {
-            Name = name,
-            ElementType = type,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static TextStringDirective?ParseTextString(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? value = reader.GetAttribute("value");
-
-        if (name is null || value is null) return null;
-
-        return new TextStringDirective
-        {
-            Name = name,
-            Value = value,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-            Condition = reader.GetAttribute("condition"),
-        };
-    }
-
-    private static StatAliasDirective?ParseStatAlias(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? alias = reader.GetAttribute("alias");
-
-        if (name is null || alias is null) return null;
-
-        return new StatAliasDirective
-        {
-            Name = name,
-            Alias = alias,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
         };
     }
 

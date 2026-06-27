@@ -25,7 +25,7 @@ public sealed class GitHubPartSource : IPartSource
         _owner = owner;
         _repo = repo;
         _ref = string.IsNullOrWhiteSpace(@ref) ? "master" : @ref;
-        _folders = folders is { Count: > 0 } ? folders : ["sorted"];
+        _folders = folders is { Count: > 0 } ? folders : [RulePartCategories.Sorted];
         _ownsHttp = httpClient is null;
         _http = httpClient ?? new HttpClient();
         // GitHub requires a User-Agent on API requests.

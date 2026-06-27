@@ -518,23 +518,5 @@ public sealed class ExportTreeBuilder
     /// Keeps retrying until no more progress is made (fixed-point iteration).
     /// </summary>
     private void ProcessDeferredGrants(int level)
-    {
-        bool progress = true;
-        int maxIterations = _deferredGrants.Count + 1; // safety valve
-        while (progress && _deferredGrants.Count > 0 && maxIterations-- > 0)
-        {
-            progress = false;
-            for (int i = _deferredGrants.Count - 1; i >= 0; i--)
-            {
-                var (grant, parent, deferredLevel) = _deferredGrants[i];
-                var child = _tree.ProcessGrant(grant, parent, deferredLevel);
-                if (child?.RulesElement is { } grantedElement)
-                {
-                    _deferredGrants.RemoveAt(i);
-                    ExecutePhase1(grantedElement, child, deferredLevel);
-                    progress = true;
-                }
-            }
-        }
-    }
+        => Phase1Cascade.ProcessDeferredGrants(_tree, _deferredGrants, ExecutePhase1);
 }

@@ -19,25 +19,9 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
 
-        // Service registration must mirror CharM.Web/Program.cs since both
-        // hosts render the same Razor components from CharM.Web.UI. Missing
-        // a service here means a component injection throws at render time
-        // and the WebView is stuck on the static "Loading..." HTML.
-        builder.Services.AddSingleton<RulesDatabaseService>();
-        builder.Services.AddSingleton<PartManagementService>();
-        builder.Services.AddSingleton<PartPreferencesStore>();
-        builder.Services.AddSingleton<IRulesDatabase>(sp =>
-            sp.GetRequiredService<RulesDatabaseService>());
-        builder.Services.AddScoped<CharacterSessionService>();
-        builder.Services.AddScoped<RetrainingService>();
-        builder.Services.AddScoped<BrowserStorageService>();
-        builder.Services.AddScoped<CharacterRestoreState>();
-        builder.Services.AddScoped<PrintCardCollector>();
-        builder.Services.AddScoped<DiceRoller>();
-        builder.Services.AddScoped<DiceRollerUiService>();
-        builder.Services.AddScoped<CharacterResourceTracker>();
-        builder.Services.AddScoped<CalculationBreakdownService>();
-        builder.Services.AddScoped<DisplaySettingsService>();
+        // Host-agnostic CharM services, shared with CharM.Web/Program.cs via
+        // AddCharmCoreServices so the two host registrations can't drift.
+        builder.Services.AddCharmCoreServices();
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();
