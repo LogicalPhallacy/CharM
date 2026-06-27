@@ -455,68 +455,28 @@ public static partial class PartMerger
         if (name is null || type is null || internalId is null)
             return null;
 
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var fieldEntries = new List<KeyValuePair<string, string>>();
-        string? prereqs = null;
-        var categories = new List<string>();
-        var rules = new List<RuleDirective>();
+        var asm = new RulesElementAssembler();
 
         foreach (var child in el.Elements())
-        {
-            switch (child.Name.LocalName)
-            {
-                case "specific":
-                    string? fieldName = Attr(child, "name");
-                    if (fieldName is not null)
-                    {
-                        string value = child.Value.Trim();
-                        // Always record the raw entry so duplicates are
-                        // recoverable (e.g. Ravening Thought emits two
-                        // <specific name="Hit"> children). The lookup
-                        // Dictionary keeps the FIRST occurrence to match
-                        // OCB's RulesElementField behavior.
-                        fieldEntries.Add(new(fieldName, value));
-                        if (!fields.ContainsKey(fieldName))
-                            fields[fieldName] = value;
-                    }
-                    break;
-                case "Prereqs":
-                    prereqs = child.Value.Trim();
-                    break;
-                case "Category":
-                    ParseCategories(child, categories);
-                    break;
-                case "rules":
-                    ParseRulesBlock(child, rules);
-                    break;
-            }
-        }
+            asm.HandleChild(new XElementChildNode(child));
 
-        // Capture mixed-content text (description body) that sits as direct XText
+        // Mixed-content text (description body) that sits as direct XText
         // children of the RulesElement, e.g. body description after </rules>.
-        var descBuilder = new System.Text.StringBuilder();
-        foreach (var node in el.Nodes().OfType<System.Xml.Linq.XText>())
-            descBuilder.Append(node.Value);
-        string descText = NormalizeDescription(descBuilder.ToString());
-        if (descText.Length > 0 && !fields.ContainsKey("Description"))
-        {
-            fields["Description"] = descText;
-            fieldEntries.Add(new("Description", descText));
-        }
+        foreach (var node in el.Nodes().OfType<XText>())
+            asm.AppendDescriptionText(node.Value);
 
-        var element = new RulesElement
-        {
-            InternalId = internalId,
-            Name = name,
-            Type = type,
-            Source = source,
-            Prereqs = prereqs,
-            Fields = fields,
-            FieldEntries = fieldEntries,
-            Rules = rules,
-        };
+        return asm.Build(internalId, name, type, source);
+    }
 
-        return new ParsedElement(element, categories);
+    /// <summary>
+    /// <see cref="IRuleChildNode"/> adapter over a LINQ-to-XML child element.
+    /// </summary>
+    private readonly struct XElementChildNode(XElement el) : IRuleChildNode
+    {
+        public string LocalName => el.Name.LocalName;
+        public string? Attr(string name) => el.Attribute(name)?.Value;
+        public string GetTextContent() => el.Value.Trim();
+        public void ParseRulesBlockInto(List<RuleDirective> rules) => ParseRulesBlock(el, rules);
     }
 
     private static void ParseCategories(XElement categoryEl, List<string> categories)

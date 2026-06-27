@@ -57,16 +57,11 @@ public static partial class RulesXmlReader
         if (name is null || type is null || internalId is null)
             return null;
 
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var fieldEntries = new List<KeyValuePair<string, string>>();
-        string? prereqs = null;
-        var categories = new List<string>();
-        var rules = new List<RuleDirective>();
+        var asm = new RulesElementAssembler();
 
         if (!reader.IsEmptyElement)
         {
             int depth = reader.Depth;
-            var description = new System.Text.StringBuilder();
             while (reader.Read())
             {
                 if (reader.NodeType == XmlNodeType.EndElement && reader.Depth == depth)
@@ -79,112 +74,32 @@ public static partial class RulesXmlReader
                      || reader.NodeType == XmlNodeType.SignificantWhitespace)
                     && reader.Depth == depth + 1)
                 {
-                    description.Append(reader.Value);
+                    asm.AppendDescriptionText(reader.Value);
                     continue;
                 }
 
                 if (reader.NodeType != XmlNodeType.Element)
                     continue;
 
-                switch (reader.LocalName)
-                {
-                    case "specific":
-                        ReadSpecific(reader, fields, fieldEntries);
-                        break;
-
-                    case "Prereqs":
-                    case "prereqs":
-                        prereqs = reader.ReadElementContentAsString()?.Trim();
-                        break;
-
-                    case "Category":
-                        ReadCategories(reader, categories);
-                        break;
-
-                    case "rules":
-                        ReadRulesBlock(reader, rules);
-                        break;
-
-                    case "print-prereqs":
-                        var printPrereqs = reader.ReadElementContentAsString()?.Trim();
-                        if (!string.IsNullOrEmpty(printPrereqs)
-                            && !fields.ContainsKey("print-prereqs"))
-                        {
-                            fields["print-prereqs"] = printPrereqs;
-                            fieldEntries.Add(new("print-prereqs", printPrereqs));
-                        }
-                        break;
-
-                    case "Flavor":
-                    case "flavor":
-                        var flavor = reader.ReadElementContentAsString()?.Trim();
-                        if (!string.IsNullOrEmpty(flavor)
-                            && !fields.ContainsKey("Flavor"))
-                        {
-                            fields["Flavor"] = flavor;
-                            fieldEntries.Add(new("Flavor", flavor));
-                        }
-                        break;
-                }
-            }
-
-            string descText = NormalizeDescription(description.ToString());
-            if (descText.Length > 0 && !fields.ContainsKey("Description"))
-            {
-                fields["Description"] = descText;
-                fieldEntries.Add(new("Description", descText));
+                asm.HandleChild(new XmlReaderChildNode(reader));
             }
         }
 
-        var element = new RulesElement
-        {
-            InternalId = internalId,
-            Name = name,
-            Type = type,
-            Source = source,
-            Prereqs = prereqs,
-            Fields = fields,
-            FieldEntries = fieldEntries,
-            Rules = rules,
-        };
-
-        return new ParsedElement(element, categories);
+        return asm.Build(internalId, name, type, source);
     }
 
-    private static void ReadSpecific(
-        XmlReader reader,
-        Dictionary<string, string> fields,
-        List<KeyValuePair<string, string>> fieldEntries)
+    /// <summary>
+    /// <see cref="IRuleChildNode"/> adapter over the streaming reader positioned
+    /// on a child element start tag. <see cref="GetTextContent"/> and
+    /// <see cref="ParseRulesBlockInto"/> consume the element (advance the cursor),
+    /// matching the inline calls they replaced.
+    /// </summary>
+    private readonly struct XmlReaderChildNode(XmlReader reader) : IRuleChildNode
     {
-        string? fieldName = reader.GetAttribute("name");
-        if (fieldName is null) return;
-
-        // NOTE: do NOT trim leading whitespace on the field name. Augmentable
-        // powers intentionally use `<specific name=" Hit">` (leading space) to
-        // distinguish each Augment-N variant's Hit/Effect/Target lines from the
-        // base power's. Collapsing them would let the last augment overwrite
-        // the base. Match OCB's behavior and treat each variant as a distinct key.
-
-        string content = reader.ReadElementContentAsString()?.Trim() ?? "";
-
-        // Always record the raw entry so callers that need duplicates (e.g.
-        // primary vs secondary attack panes — Ravening Thought emits two
-        // <specific name="Hit"> children, one for the primary attack at 2d6
-        // and one for the secondary at 1d6) can recover both. The lookup
-        // Dictionary holds the FIRST occurrence to match OCB's
-        // RulesElementField behavior for single-named queries.
-        fieldEntries.Add(new(fieldName, content));
-        if (!fields.ContainsKey(fieldName))
-            fields[fieldName] = content;
-    }
-
-    private static void ReadCategories(XmlReader reader, List<string> categories)
-    {
-        string content = reader.ReadElementContentAsString()?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(content)) return;
-
-        foreach (var cat in content.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            categories.Add(cat);
+        public string LocalName => reader.LocalName;
+        public string? Attr(string name) => reader.GetAttribute(name);
+        public string GetTextContent() => reader.ReadElementContentAsString()?.Trim() ?? "";
+        public void ParseRulesBlockInto(List<RuleDirective> rules) => ReadRulesBlock(reader, rules);
     }
 
     private static void ReadRulesBlock(XmlReader reader, List<RuleDirective> rules)
