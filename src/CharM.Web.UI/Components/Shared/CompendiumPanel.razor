@@ -1,0 +1,34 @@
+@using CharM.Engine.Rules
+@using CharM.Web.Services
+@inject CompendiumLookupService Compendium
+
+@if (_body is not null)
+{
+    <div class="mt-4 border-t border-outline-variant/40 pt-3">
+        <button @onclick="() => _expanded = !_expanded"
+                class="flex items-center gap-1 text-xs font-label font-bold uppercase tracking-wider text-primary hover:text-primary/80 transition-colors">
+            <span>@(_expanded ? "▾" : "▸")</span>
+            <span>Compendium</span>
+            <span class="text-on-surface-variant font-normal normal-case">(@_body.CompendiumId)</span>
+        </button>
+        @if (_expanded)
+        {
+            <div class="compendium-body mt-2 text-sm text-on-surface leading-relaxed">
+                @((MarkupString)_body.Html)
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public RulesElement? Element { get; set; }
+
+    private CompendiumBody? _body;
+    private bool _expanded;
+
+    protected override void OnParametersSet()
+    {
+        _body = Element is null ? null : Compendium.Lookup(Element);
+        _expanded = false;
+    }
+}

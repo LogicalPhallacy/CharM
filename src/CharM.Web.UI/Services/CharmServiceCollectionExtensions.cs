@@ -18,6 +18,7 @@ public static class CharmServiceCollectionExtensions
         services.AddSingleton<RulesDatabaseService>();
         services.AddSingleton<PartManagementService>();
         services.AddSingleton<PartPreferencesStore>();
+        services.AddSingleton<CompendiumLookupService>();
         services.AddSingleton<IRulesDatabase>(sp => sp.GetRequiredService<RulesDatabaseService>());
 
         // Scoped per connection (one session per user tab on the server host).

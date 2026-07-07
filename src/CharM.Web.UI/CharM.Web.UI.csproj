@@ -5,6 +5,7 @@
     <ProjectReference Include="..\CharM.RulesDb\CharM.RulesDb.csproj" />
     <ProjectReference Include="..\CharM.Serialization\CharM.Serialization.csproj" />
     <ProjectReference Include="..\CharM.ImportExport\CharM.ImportExport.csproj" />
+    <ProjectReference Include="..\CharM.Compendium\CharM.Compendium.csproj" />
   </ItemGroup>
 
   <ItemGroup>
