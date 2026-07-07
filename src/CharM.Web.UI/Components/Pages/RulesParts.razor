@@ -36,6 +36,7 @@
                     <select @bind="_kind" class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline">
                         <option value="@PartSourceKind.GitHub">GitHub</option>
                         <option value="@PartSourceKind.CbloaderHost">CBLoader host</option>
+                        <option value="@PartSourceKind.WebPageIndex">Index page URL</option>
                     </select>
                 </label>
                 @if (_kind == PartSourceKind.GitHub)
@@ -54,7 +55,7 @@
                 else
                 {
                     <label class="text-sm text-on-surface flex flex-col gap-1 md:col-span-3">
-                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">Host base URL</span>
+                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">@(_kind == PartSourceKind.WebPageIndex ? "Index page URL" : "Host base URL")</span>
                         <input @bind="_hostUrl" placeholder="https://cbloader.vorpald20.com/"
                                class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
                     </label>
@@ -158,9 +159,13 @@
                 </div>
             </div>
             <div class="max-h-96 overflow-y-auto pr-2">
-                @foreach (var group in GetLayers().GroupBy(p => p.Category ?? "uncategorized"))
+                @foreach (var group in GetLayers()
+                    .GroupBy(p => p.Category ?? "uncategorized")
+                    .OrderByDescending(g => g.Any(p => p.IsOfficial))
+                    .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
                 {
                     var parts = group.ToList();
+                    var isOfficial = parts.Any(p => p.IsOfficial);
                     var enabledCount = parts.Count(EffectiveEnabled);
                     var allEnabled = enabledCount == parts.Count;
                     <div class="mt-4 first:mt-0">
@@ -168,6 +173,10 @@
                             <input type="checkbox" checked="@allEnabled" disabled="@_busy"
                                    @onchange="@(e => ToggleCategory(parts, (bool)e.Value!))" />
                             <span class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant">@group.Key</span>
+                            @if (isOfficial)
+                            {
+                                <span class="text-[10px] font-label font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary-container text-on-primary-container">Official</span>
+                            }
                             <span class="text-xs text-on-surface-variant">(@enabledCount/@parts.Count)</span>
                         </label>
                         <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8">
@@ -268,7 +277,7 @@
             if (!string.IsNullOrWhiteSpace(cfg.Owner) && !string.IsNullOrWhiteSpace(cfg.Repo))
                 _ownerRepo = $"{cfg.Owner}/{cfg.Repo}";
             _ref = string.IsNullOrWhiteSpace(cfg.Ref) ? "master" : cfg.Ref;
-            _hostUrl = cfg.HostBaseUrl;
+            _hostUrl = cfg.Kind == PartSourceKind.WebPageIndex ? cfg.PageUrl : cfg.HostBaseUrl;
         }
 
         _allSources = RulesDatabase.IsLoaded
@@ -342,10 +351,14 @@
         }
         if (string.IsNullOrWhiteSpace(_hostUrl))
         {
-            SetMessage("Enter the CBLoader host base URL.", isError: true);
+            SetMessage(_kind == PartSourceKind.WebPageIndex
+                ? "Enter the index page URL."
+                : "Enter the CBLoader host base URL.", isError: true);
             return null;
         }
-        return PartSourceConfig.CbloaderHost(_hostUrl);
+        return _kind == PartSourceKind.WebPageIndex
+            ? PartSourceConfig.WebPageIndex(_hostUrl)
+            : PartSourceConfig.CbloaderHost(_hostUrl);
     }
 
     private async Task CheckUpdatesAsync()

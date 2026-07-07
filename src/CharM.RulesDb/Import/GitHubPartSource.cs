@@ -12,6 +12,9 @@ namespace CharM.RulesDb.Import;
 /// </summary>
 public sealed class GitHubPartSource : IPartSource
 {
+    /// <summary>Repo folder holding the CBLoader <c>.index</c> files (cbparts convention).</summary>
+    private const string IndexesFolder = "indexes";
+
     private readonly string _owner;
     private readonly string _repo;
     private readonly string _ref;
@@ -37,22 +40,12 @@ public sealed class GitHubPartSource : IPartSource
 
     public async Task<IReadOnlyList<RemotePartInfo>> ListAsync(CancellationToken cancellationToken = default)
     {
+        var catalog = await BuildIndexCatalogAsync(cancellationToken);
+
         var parts = new List<RemotePartInfo>();
         foreach (var folder in _folders)
         {
-            var url = $"https://api.github.com/repos/{_owner}/{_repo}/contents/{folder}?ref={Uri.EscapeDataString(_ref)}";
-            List<GitHubContentEntry>? entries;
-            try
-            {
-                entries = await _http.GetFromJsonAsync<List<GitHubContentEntry>>(url, cancellationToken);
-            }
-            catch (HttpRequestException)
-            {
-                continue; // folder may not exist in this repo/ref
-            }
-
-            if (entries is null) continue;
-
+            var entries = await ListFolderAsync(folder, cancellationToken);
             foreach (var e in entries)
             {
                 if (!string.Equals(e.Type, "file", StringComparison.OrdinalIgnoreCase)) continue;
@@ -63,7 +56,10 @@ public sealed class GitHubPartSource : IPartSource
                 {
                     PartId = $"{folder}/{e.Name}",
                     Filename = e.Name,
-                    Category = folder,
+                    // Category + official come from the index that references
+                    // this part; fall back to the physical folder name.
+                    Category = catalog.CategoryFor(e.Name, folder),
+                    IsOfficial = catalog.IsOfficial(e.Name),
                     Version = null,        // not known without fetching the file
                     ContentHash = e.Sha,   // git blob SHA — stable content id
                     DownloadUrl = e.DownloadUrl!,
@@ -71,6 +67,41 @@ public sealed class GitHubPartSource : IPartSource
             }
         }
         return parts;
+    }
+
+    /// <summary>
+    /// Build a <see cref="PartIndexCatalog"/> from the repo's <c>indexes/</c>
+    /// folder so parts can be categorized by the content pack (index) they
+    /// belong to rather than by their physical folder. Missing folder → empty
+    /// catalog (parts fall back to folder categorization).
+    /// </summary>
+    private async Task<PartIndexCatalog> BuildIndexCatalogAsync(CancellationToken cancellationToken)
+    {
+        var catalog = new PartIndexCatalog();
+        var entries = await ListFolderAsync(IndexesFolder, cancellationToken);
+        foreach (var e in entries
+                     .Where(e => string.Equals(e.Type, "file", StringComparison.OrdinalIgnoreCase))
+                     .Where(e => e.Name.EndsWith(".index", StringComparison.OrdinalIgnoreCase))
+                     .Where(e => !string.IsNullOrWhiteSpace(e.DownloadUrl))
+                     .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var doc = await PartIndexFetcher.FetchIndexAsync(_http, new Uri(e.DownloadUrl!), cancellationToken);
+            if (doc is not null) catalog.Add(doc);
+        }
+        return catalog;
+    }
+
+    private async Task<IReadOnlyList<GitHubContentEntry>> ListFolderAsync(string folder, CancellationToken cancellationToken)
+    {
+        var url = $"https://api.github.com/repos/{_owner}/{_repo}/contents/{folder}?ref={Uri.EscapeDataString(_ref)}";
+        try
+        {
+            return await _http.GetFromJsonAsync<List<GitHubContentEntry>>(url, cancellationToken) ?? [];
+        }
+        catch (HttpRequestException)
+        {
+            return []; // folder may not exist in this repo/ref
+        }
     }
 
     public async Task<byte[]> DownloadAsync(RemotePartInfo part, CancellationToken cancellationToken = default)

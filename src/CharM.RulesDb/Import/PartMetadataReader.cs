@@ -17,8 +17,11 @@ public sealed record PartFileInfo
     /// <summary>The <c>&lt;Filename&gt;</c> from UpdateInfo, or the on-disk name.</summary>
     public required string Filename { get; init; }
 
-    /// <summary>Folder-derived category: sorted | UnearthedArcana | Homebrew | 3rdParty, or null.</summary>
+    /// <summary>Category: the cleaned index name, else the physical folder, or null.</summary>
     public string? Category { get; init; }
+
+    /// <summary>True when this part belongs to an official index (WotC / Unearthed Arcana).</summary>
+    public bool IsOfficial { get; init; }
 
     /// <summary><c>&lt;UpdateInfo&gt;&lt;Version&gt;</c> (e.g. "1.42"), or null.</summary>
     public string? Version { get; init; }
@@ -44,15 +47,15 @@ public sealed record PartFileInfo
 public static class PartMetadataReader
 {
     /// <summary>Read metadata from a part file on disk.</summary>
-    public static PartFileInfo Read(string partPath, string? partId = null, string? category = null)
+    public static PartFileInfo Read(string partPath, string? partId = null, string? category = null, bool isOfficial = false)
     {
         byte[] bytes = File.ReadAllBytes(partPath);
         string filename = Path.GetFileName(partPath);
-        return Read(bytes, filename, partId ?? filename, category);
+        return Read(bytes, filename, partId ?? filename, category, isOfficial);
     }
 
     /// <summary>Read metadata from in-memory part bytes (e.g. uploaded or downloaded).</summary>
-    public static PartFileInfo Read(byte[] bytes, string filename, string? partId = null, string? category = null)
+    public static PartFileInfo Read(byte[] bytes, string filename, string? partId = null, string? category = null, bool isOfficial = false)
     {
         string contentHash = Convert.ToHexString(SHA256.HashData(bytes));
 
@@ -91,6 +94,7 @@ public static class PartMetadataReader
             PartId = partId ?? filename,
             Filename = infoFilename?.Trim() is { Length: > 0 } f ? f : filename,
             Category = category,
+            IsOfficial = isOfficial,
             Version = NullIfBlank(version),
             Description = NullIfBlank(description),
             PartAddress = NullIfBlank(partAddress),

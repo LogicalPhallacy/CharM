@@ -13,7 +13,7 @@ public static class RulesDbSchema
     /// tables (rules_elements / element_categories) are unaffected; opening an
     /// older DB triggers a non-destructive upconvert (see RulesDbUpconverter).
     /// </summary>
-    public const int MetadataSchemaVersion = 1;
+    public const int MetadataSchemaVersion = 2;
 
     public static void Create(SqliteConnection connection)
     {
@@ -70,6 +70,7 @@ public static class RulesDbSchema
                 enabled      INTEGER NOT NULL DEFAULT 1,
                 layer_order  INTEGER NOT NULL DEFAULT 0,
                 is_base      INTEGER NOT NULL DEFAULT 0,
+                is_official  INTEGER NOT NULL DEFAULT 0,
                 applied_at   TEXT
             );
 
@@ -90,7 +91,27 @@ public static class RulesDbSchema
             """;
         cmd.ExecuteNonQuery();
 
+        // Backward-compatible column additions for databases created under an
+        // earlier metadata schema (CREATE TABLE IF NOT EXISTS won't add columns
+        // to an existing table). Idempotent.
+        EnsureColumn(connection, "part_registry", "is_official", "INTEGER NOT NULL DEFAULT 0");
+
         SetMetaIfAbsent(connection, "schema_version", MetadataSchemaVersion.ToString());
+    }
+
+    /// <summary>Add a column to a table when it does not already exist (idempotent).</summary>
+    private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
+    {
+        using (var check = connection.CreateCommand())
+        {
+            check.CommandText = $"SELECT 1 FROM pragma_table_info('{table}') WHERE name = $c LIMIT 1";
+            check.Parameters.AddWithValue("$c", column);
+            if (check.ExecuteScalar() is not null) return;
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE \"{table}\" ADD COLUMN {column} {definition}";
+        alter.ExecuteNonQuery();
     }
 
     /// <summary>Read a value from db_meta, or null if absent.</summary>

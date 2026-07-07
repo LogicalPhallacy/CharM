@@ -33,7 +33,27 @@ public sealed class RulesDatabaseService : IRulesDatabase
     // file, or the open handle blocks the replace.
     private CancellationTokenSource? _hashCts;
 
+    // The in-flight background content-hash task. Tracked so a rebuild can wait
+    // for it to actually release its (pooled) read connection before swapping
+    // the working file — cancelling the token alone doesn't guarantee the scan
+    // loop has exited and disposed its connection yet.
+    private Task? _hashTask;
+
     public event Action? Changed;
+
+    // Set once Dispose() begins. Guards Changed so a late event (background
+    // content-hash completion, or the teardown Unload) can't queue a render
+    // against an already-disposed circuit/service-provider — the
+    // ObjectDisposedException('IServiceProvider') seen on app exit.
+    private volatile bool _disposed;
+
+    /// <summary>Raise <see cref="Changed"/> unless the service is disposing.</summary>
+    private void RaiseChanged()
+    {
+        if (_disposed)
+            return;
+        Changed?.Invoke();
+    }
 
     public RulesDatabaseService()
         : this(RulesDatabasePathResolver.GetDefaultWorkingDirectory())
@@ -130,14 +150,14 @@ public sealed class RulesDatabaseService : IRulesDatabase
     {
         if (IsManageMode) return;
         IsManageMode = true;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     public void ExitManageMode()
     {
         if (!IsManageMode) return;
         IsManageMode = false;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     /// <summary>
@@ -196,7 +216,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
             if (IsManageMode)
             {
                 IsManageMode = false;
-                Changed?.Invoke();
+                RaiseChanged();
             }
             return true;
         }
@@ -354,10 +374,10 @@ public sealed class RulesDatabaseService : IRulesDatabase
                 // archives every part, writes the manifest, and materializes the
                 // working rules.db. This enables later enable/disable + rebuild.
                 var store = new RulesDbLayerStore(_workingDirectory);
-                var stagedParts = Directory.GetFiles(partsDirectory, "*.part")
-                    .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
-                    .Select(f => (Path: f, PartId: Path.GetFileName(f), Category: (string?)null))
-                    .ToList();
+                // Categorize local/downloaded parts by any .index files present
+                // (DownloadIndexParts saves the index; an indexes/ subfolder is
+                // also honored) — falling back to the physical folder name.
+                var stagedParts = LocalPartStager.Stage(partsDirectory);
 
                 SetProgress(new DbBuildProgress("Importing rules elements"));
                 store.Initialize(xmlPath, stagedParts, dbPath,
@@ -477,9 +497,11 @@ public sealed class RulesDatabaseService : IRulesDatabase
             SizeBytes = null;
             LoadedAt = null;
             _vocabulary = null;
-            // Stop any in-flight hash so it releases its read handle.
-            _hashCts?.Cancel();
         }
+
+        // Stop the background hash AND wait for it to release its read handle,
+        // so a follow-up build/overwrite of rules.db can't race it.
+        CancelBackgroundHash();
 
         old?.Dispose();
         // Belt-and-suspenders: drop any pooled handle that some other code path
@@ -488,11 +510,15 @@ public sealed class RulesDatabaseService : IRulesDatabase
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
         if (wasLoaded)
-            Changed?.Invoke();
+            RaiseChanged();
     }
 
     public void Dispose()
     {
+        // Set the guard FIRST so the teardown Unload (and any in-flight
+        // background-hash completion) can't raise Changed and trigger a render
+        // on a circuit whose service provider is already being disposed.
+        _disposed = true;
         Unload();
         _notRebuilding.Dispose();
         lock (_sync)
@@ -579,7 +605,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         // content hash) may not have released its handle the instant we asked it
         // to cancel — cooperative cancellation has a short tail.
         Exception? last = null;
-        for (var attempt = 0; attempt < 20; attempt++)
+        for (var attempt = 0; attempt < 40; attempt++)
         {
             try
             {
@@ -587,8 +613,11 @@ public sealed class RulesDatabaseService : IRulesDatabase
                 last = null;
                 break;
             }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // A reader (content hash, a racing query, or a pooled handle)
+                // may still hold the file open. Windows surfaces this as either
+                // IOException or UnauthorizedAccessException; retry both.
                 last = ex;
                 Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
                 Thread.Sleep(50);
@@ -673,7 +702,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         }
 
         old?.Dispose();
-        Changed?.Invoke();
+        RaiseChanged();
 
         CancellationToken hashToken;
         lock (_sync)
@@ -682,7 +711,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         // Compute the content hash off the UI thread — a ~50 MB DB takes a
         // couple of seconds to fingerprint. Fire-and-forget; the UI watches
         // ContentHashComputing + Changed to know when it lands.
-        _ = Task.Run(() =>
+        var hashTask = Task.Run(() =>
         {
             try
             {
@@ -694,7 +723,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
                     ContentHash = hash;
                     ContentHashComputing = false;
                 }
-                Changed?.Invoke();
+                RaiseChanged();
             }
             catch (OperationCanceledException)
             {
@@ -708,26 +737,58 @@ public sealed class RulesDatabaseService : IRulesDatabase
                         return;
                     ContentHashComputing = false;
                 }
-                Changed?.Invoke();
+                RaiseChanged();
             }
         }, hashToken);
+
+        lock (_sync)
+            _hashTask = hashTask;
     }
 
     /// <summary>
-    /// Cancel the in-flight background content-hash and wait briefly for it to
-    /// release its read connection, so the working DB file can be replaced.
+    /// Cancel the in-flight background content-hash AND wait for it to actually
+    /// finish, so its (pooled) read connection is released before the working
+    /// DB file is replaced. Cancelling the token alone is not enough — the scan
+    /// loop only observes cancellation between rows, so the connection can still
+    /// be open for a beat, which makes the subsequent <c>File.Move</c> fail with
+    /// a sharing violation (IOException/UnauthorizedAccessException). Bounded so
+    /// a wedged hash can never stall the swap indefinitely.
     /// </summary>
     private void CancelBackgroundHash()
     {
+        Task? task;
         lock (_sync)
+        {
             _hashCts?.Cancel();
+            task = _hashTask;
+        }
+
+        if (task is null)
+            return;
+
+        try
+        {
+            // The scan checks cancellation per row, so this returns quickly; the
+            // timeout is just a safety net against a pathological stall.
+            task.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException)
+        {
+            // Cancellation surfaces as OperationCanceledException here — expected.
+        }
+
+        lock (_sync)
+        {
+            if (ReferenceEquals(_hashTask, task))
+                _hashTask = null;
+        }
     }
 
     private void SetStatus(string message, bool isError)
     {
         StatusMessage = message;
         StatusIsError = isError;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     private void SetProgress(DbBuildProgress progress)
@@ -738,13 +799,13 @@ public sealed class RulesDatabaseService : IRulesDatabase
             ? progress.Phase
             : $"{progress.Phase}: {progress.Detail}";
         StatusIsError = false;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     private void ClearProgress()
     {
         CurrentProgress = null;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     private static void TryDelete(string path)

@@ -28,13 +28,14 @@ internal static class RegistryWriter
             cmd.CommandText = """
                 INSERT INTO part_registry
                     (part_id, filename, category, display_name, version,
-                     content_hash, source_url, enabled, layer_order, is_base, applied_at)
-                VALUES ($id, $fn, $cat, $disp, $ver, $hash, $url, 0, $order, 0, NULL)
+                     content_hash, source_url, enabled, layer_order, is_base, is_official, applied_at)
+                VALUES ($id, $fn, $cat, $disp, $ver, $hash, $url, 0, $order, 0, $official, NULL)
                 ON CONFLICT(part_id) DO UPDATE SET
                     enabled = 0,
                     version = excluded.version,
                     content_hash = excluded.content_hash,
-                    layer_order = excluded.layer_order
+                    layer_order = excluded.layer_order,
+                    is_official = excluded.is_official
                 """;
             cmd.Parameters.AddWithValue("$id", p.PartId);
             cmd.Parameters.AddWithValue("$fn", p.Filename);
@@ -44,6 +45,7 @@ internal static class RegistryWriter
             cmd.Parameters.AddWithValue("$hash", (object?)p.ContentHash ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$url", (object?)p.SourceUrl ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$order", p.LayerOrder);
+            cmd.Parameters.AddWithValue("$official", p.IsOfficial ? 1 : 0);
             cmd.ExecuteNonQuery();
         }
         tx.Commit();

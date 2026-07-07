@@ -13,8 +13,11 @@ public sealed record RemotePartInfo
     /// <summary>Bare file name (e.g. <c>06-races.part</c>).</summary>
     public required string Filename { get; init; }
 
-    /// <summary>Category bucket: sorted | UnearthedArcana | Homebrew | 3rdParty, or null.</summary>
+    /// <summary>Category bucket: the cleaned index name, else the physical folder, or null.</summary>
     public string? Category { get; init; }
+
+    /// <summary>True when this part belongs to an official index (WotC / Unearthed Arcana).</summary>
+    public bool IsOfficial { get; init; }
 
     /// <summary>
     /// <c>&lt;UpdateInfo&gt;&lt;Version&gt;</c> when known (CBLoader host exposes

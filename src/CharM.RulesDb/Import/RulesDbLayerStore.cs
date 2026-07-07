@@ -14,6 +14,15 @@ public sealed class PartManifestEntry
     public required string PartId { get; set; }
     public required string Filename { get; set; }
     public string? Category { get; set; }
+
+    /// <summary>
+    /// True when this part belongs to an "official" index (WotC / Unearthed
+    /// Arcana — <c>&lt;Description category="Official"&gt;</c>). Official parts
+    /// are treated as heavy layers (folded into the base checkpoint) and are
+    /// enabled by default.
+    /// </summary>
+    public bool IsOfficial { get; set; }
+
     public string? Version { get; set; }
     public string? ContentHash { get; set; }
     public string? SourceUrl { get; set; }
@@ -50,11 +59,6 @@ public sealed class PartManifest
 /// </summary>
 public sealed class RulesDbLayerStore
 {
-    // Categories treated as "heavy/stable" — folded into the checkpoint so that
-    // toggling a light overlay never re-merges the multi-MB official item parts.
-    private static readonly HashSet<string> HeavyCategories =
-        new(RulePartCategories.HeavyCategories, StringComparer.OrdinalIgnoreCase);
-
     private readonly string _archiveDir;
     private readonly string _baseSnapshotPath;
     private readonly string _checkpointPath;
@@ -82,7 +86,7 @@ public sealed class RulesDbLayerStore
     /// </summary>
     public void Initialize(
         string xmlPath,
-        IReadOnlyList<(string Path, string PartId, string? Category)> partFiles,
+        IReadOnlyList<(string Path, string PartId, string? Category, bool IsOfficial)> partFiles,
         string workingDbPath,
         IProgress<string>? progress = null)
     {
@@ -93,9 +97,9 @@ public sealed class RulesDbLayerStore
 
         var manifest = new PartManifest { BaseXmlFilename = Path.GetFileName(xmlPath) };
         int order = 1;
-        foreach (var (path, partId, category) in partFiles)
+        foreach (var (path, partId, category, isOfficial) in partFiles)
         {
-            var info = SafeReadInfo(path, partId, category);
+            var info = SafeReadInfo(path, partId, category, isOfficial);
             if (info.IsObsolete) continue;
 
             string archiveFile = SafeArchiveName(partId, order);
@@ -106,10 +110,13 @@ public sealed class RulesDbLayerStore
                 PartId = partId,
                 Filename = info.Filename,
                 Category = category,
+                IsOfficial = isOfficial,
                 Version = info.Version,
                 ContentHash = info.ContentHash,
                 SourceUrl = info.PartAddress,
-                Enabled = true,
+                // Official content packs (WotC / Unearthed Arcana) are on by
+                // default; other content packs are opt-in.
+                Enabled = isOfficial,
                 LayerOrder = order++,
                 ArchiveFile = archiveFile,
             });
@@ -197,7 +204,7 @@ public sealed class RulesDbLayerStore
         {
             progress?.Report($"Downloading {remote.PartId} ({++index}/{total})");
             byte[] bytes = await source.DownloadAsync(remote, cancellationToken);
-            var info = PartMetadataReader.Read(bytes, remote.Filename, remote.PartId, remote.Category);
+            var info = PartMetadataReader.Read(bytes, remote.Filename, remote.PartId, remote.Category, remote.IsOfficial);
             if (info.IsObsolete) continue;
 
             var existing = manifest.Parts.FirstOrDefault(p =>
@@ -214,11 +221,13 @@ public sealed class RulesDbLayerStore
                     PartId = remote.PartId,
                     Filename = info.Filename,
                     Category = remote.Category,
+                    IsOfficial = remote.IsOfficial,
                     Version = info.Version ?? remote.Version,
                     ContentHash = info.ContentHash,
                     SourceHash = remote.ContentHash,
                     SourceUrl = remote.DownloadUrl,
-                    Enabled = true,
+                    // Official packs on by default; others opt-in.
+                    Enabled = remote.IsOfficial,
                     LayerOrder = nextOrder++,
                     ArchiveFile = archiveFile,
                 });
@@ -227,6 +236,7 @@ public sealed class RulesDbLayerStore
             {
                 existing.Filename = info.Filename;
                 existing.Category = remote.Category ?? existing.Category;
+                existing.IsOfficial = remote.IsOfficial;
                 existing.Version = info.Version ?? remote.Version ?? existing.Version;
                 existing.ContentHash = info.ContentHash;
                 existing.SourceHash = remote.ContentHash;
@@ -315,16 +325,15 @@ public sealed class RulesDbLayerStore
         return sb.ToString();
     }
 
-    private static bool IsHeavy(PartManifestEntry p) =>
-        p.Category is not null && HeavyCategories.Contains(p.Category);
+    private static bool IsHeavy(PartManifestEntry p) => p.IsOfficial;
 
     private IReadOnlyList<PartSourceFile> ToSourceFiles(IEnumerable<PartManifestEntry> parts) =>
         parts.Select(p => new PartSourceFile(
-            Path.Combine(_archiveDir, p.ArchiveFile), p.PartId, p.Category)).ToList();
+            Path.Combine(_archiveDir, p.ArchiveFile), p.PartId, p.Category, p.IsOfficial)).ToList();
 
-    private PartFileInfo SafeReadInfo(string path, string partId, string? category)
+    private PartFileInfo SafeReadInfo(string path, string partId, string? category, bool isOfficial = false)
     {
-        try { return PartMetadataReader.Read(path, partId, category); }
+        try { return PartMetadataReader.Read(path, partId, category, isOfficial); }
         catch
         {
             return new PartFileInfo
@@ -332,6 +341,7 @@ public sealed class RulesDbLayerStore
                 PartId = partId,
                 Filename = Path.GetFileName(path),
                 Category = category,
+                IsOfficial = isOfficial,
                 ContentHash = "",
             };
         }

@@ -136,7 +136,7 @@ public static partial class PartMerger
             if (root is null) continue;
 
             PartFileInfo partInfo;
-            try { partInfo = PartMetadataReader.Read(part.Path, partId: part.PartId, category: part.Category); }
+            try { partInfo = PartMetadataReader.Read(part.Path, partId: part.PartId, category: part.Category, isOfficial: part.IsOfficial); }
             catch { partInfo = null!; }
 
             using var tx = connection.BeginTransaction();
@@ -222,8 +222,8 @@ public static partial class PartMerger
         cmd.CommandText = """
             INSERT INTO part_registry
                 (part_id, filename, category, display_name, version,
-                 content_hash, source_url, enabled, layer_order, is_base, applied_at)
-            VALUES ($id, $fn, $cat, $disp, $ver, $hash, $url, 1, $order, 0, $now)
+                 content_hash, source_url, enabled, layer_order, is_base, is_official, applied_at)
+            VALUES ($id, $fn, $cat, $disp, $ver, $hash, $url, 1, $order, 0, $official, $now)
             ON CONFLICT(part_id) DO UPDATE SET
                 filename = excluded.filename,
                 category = excluded.category,
@@ -232,6 +232,7 @@ public static partial class PartMerger
                 content_hash = excluded.content_hash,
                 source_url = excluded.source_url,
                 layer_order = excluded.layer_order,
+                is_official = excluded.is_official,
                 applied_at = excluded.applied_at
             """;
         cmd.Parameters.AddWithValue("$id", info.PartId);
@@ -242,6 +243,7 @@ public static partial class PartMerger
         cmd.Parameters.AddWithValue("$hash", info.ContentHash);
         cmd.Parameters.AddWithValue("$url", (object?)info.PartAddress ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$order", layerOrder);
+        cmd.Parameters.AddWithValue("$official", info.IsOfficial ? 1 : 0);
         cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("o"));
         cmd.ExecuteNonQuery();
     }
@@ -636,4 +638,4 @@ public sealed record MergeResult(
 /// <see cref="PartMerger.MergeFiles"/> so callers control the exact set and
 /// order of parts applied (e.g. the layered rebuild service).
 /// </summary>
-public sealed record PartSourceFile(string Path, string PartId, string? Category);
+public sealed record PartSourceFile(string Path, string PartId, string? Category, bool IsOfficial = false);

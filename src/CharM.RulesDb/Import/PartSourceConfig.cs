@@ -7,6 +7,7 @@ public enum PartSourceKind
 {
     GitHub,
     CbloaderHost,
+    WebPageIndex,
 }
 
 /// <summary>
@@ -33,12 +34,21 @@ public sealed class PartSourceConfig
     /// <summary>Base URL exposing versions2.txt + part files (e.g. https://cbloader.vorpald20.com/).</summary>
     public string? HostBaseUrl { get; set; }
 
+    // ---- Web page index ----
+    /// <summary>
+    /// URL of an HTML landing page whose <c>.index</c> links are scraped and
+    /// parsed (e.g. https://cbloader.vorpald20.com/). Categories come from the
+    /// indexes, not the folders.
+    /// </summary>
+    public string? PageUrl { get; set; }
+
     /// <summary>True when the config has enough information to construct a source.</summary>
     [JsonIgnore]
     public bool IsComplete => Kind switch
     {
         PartSourceKind.GitHub => !string.IsNullOrWhiteSpace(Owner) && !string.IsNullOrWhiteSpace(Repo),
         PartSourceKind.CbloaderHost => !string.IsNullOrWhiteSpace(HostBaseUrl),
+        PartSourceKind.WebPageIndex => !string.IsNullOrWhiteSpace(PageUrl),
         _ => false,
     };
 
@@ -56,6 +66,12 @@ public sealed class PartSourceConfig
         Kind = PartSourceKind.CbloaderHost,
         HostBaseUrl = baseUrl,
     };
+
+    public static PartSourceConfig WebPageIndex(string pageUrl) => new()
+    {
+        Kind = PartSourceKind.WebPageIndex,
+        PageUrl = pageUrl,
+    };
 }
 
 /// <summary>Builds an <see cref="IPartSource"/> from a <see cref="PartSourceConfig"/>.</summary>
@@ -72,6 +88,7 @@ public static class PartSourceFactory
             PartSourceKind.GitHub => new GitHubPartSource(
                 config.Owner!, config.Repo!, config.Ref, config.Folders, httpClient),
             PartSourceKind.CbloaderHost => new CbloaderHostPartSource(config.HostBaseUrl!, httpClient),
+            PartSourceKind.WebPageIndex => new WebPageIndexPartSource(config.PageUrl!, httpClient),
             _ => throw new ArgumentOutOfRangeException(nameof(config)),
         };
     }
