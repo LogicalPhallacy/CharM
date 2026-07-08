@@ -33,6 +33,7 @@ public sealed class WebPageIndexPartSource : IPartSource
 
         var parts = new List<RemotePartInfo>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var indexes = new List<PartIndexDocument>();
 
         foreach (var link in links)
         {
@@ -40,6 +41,7 @@ public sealed class WebPageIndexPartSource : IPartSource
             {
                 var doc = await PartIndexFetcher.FetchIndexAsync(_http, link, cancellationToken);
                 if (doc is null) continue;
+                indexes.Add(doc);
                 foreach (var part in PartIndexFetcher.ToRemoteParts(doc, link))
                     if (seen.Add(part.PartId)) parts.Add(part);
             }
@@ -55,7 +57,9 @@ public sealed class WebPageIndexPartSource : IPartSource
             }
         }
 
-        return parts;
+        // Load order: WotC → Unearthed Arcana → other indexes alphabetically,
+        // parts alphabetical within each index (shared with every source).
+        return PartLoadOrder.Order(parts, p => p.Filename, indexes);
     }
 
     public async Task<byte[]> DownloadAsync(RemotePartInfo part, CancellationToken cancellationToken = default)

@@ -125,6 +125,26 @@ public static partial class CompendiumIdMapper
         return i < id.Length && int.TryParse(id.AsSpan(i), out var n) ? n : -1;
     }
 
+    /// <summary>
+    /// Split a compendium id (<c>&lt;category&gt;&lt;num&gt;</c>, e.g.
+    /// "power6872") into its category prefix and numeric suffix. Returns false
+    /// when either part is missing. Shared by link generation (CLI + Web) so
+    /// both build compendium references from a <c>compendiumid</c> specific the
+    /// same way.
+    /// </summary>
+    public static bool SplitCompendiumId(string? compendiumId, out string category, out string number)
+    {
+        category = string.Empty;
+        number = string.Empty;
+        if (string.IsNullOrEmpty(compendiumId)) return false;
+        int i = compendiumId.Length;
+        while (i > 0 && char.IsDigit(compendiumId[i - 1])) i--;
+        if (i == 0 || i == compendiumId.Length) return false;
+        category = compendiumId[..i];
+        number = compendiumId[i..];
+        return true;
+    }
+
     /// <summary>The <c>ID_&lt;NS&gt;</c> namespace prefix of an internal-id (e.g. <c>ID_FMP</c>).</summary>
     public static string Namespace(string internalId)
     {
@@ -150,4 +170,58 @@ public static partial class CompendiumIdMapper
 
     public static bool IsIdConventionCategory(string? category) =>
         category is not null && IdConventionCategories.Contains(category);
+
+    /// <summary>
+    /// The ID_FMP prefixes OCB actually emitted compendium urls for, mapped to
+    /// the compendium page/category. This is the exact set the url heuristic
+    /// covers — deliberately narrower than <see cref="CategoryTokenToCategory"/>
+    /// (no catalog families, whose numbers don't carry compendium ids) — so any
+    /// element it doesn't cover needs an explicit <c>compendiumid</c> specific.
+    /// </summary>
+    private static readonly (string Prefix, string Page)[] FmpConventionMap =
+    [
+        ("ID_FMP_EPIC_DESTINY_", "epicdestiny"),
+        ("ID_FMP_HYBRID_CLASS_", "class"),
+        ("ID_FMP_PARAGON_PATH_", "paragonpath"),
+        ("ID_FMP_CLASS_",        "class"),
+        ("ID_FMP_FEAT_",         "feat"),
+        ("ID_FMP_POWER_",        "power"),
+        ("ID_FMP_RACE_",         "race"),
+        ("ID_FMP_SKILL_",        "skill"),
+    ];
+
+    /// <summary>
+    /// Resolve an internal-id to the compendium page and (raw) number the OCB
+    /// FMP url convention implies, or false when the id isn't covered. Shared by
+    /// compendium link generation and the compendiumid part generator so both
+    /// agree on exactly which elements already link automatically (and which
+    /// therefore need a <c>compendiumid</c> specific). The number tail is
+    /// returned verbatim to preserve historical url output for suffixed ids.
+    /// </summary>
+    public static bool TryFmpConventionMap(string? internalId, out string page, out string number)
+    {
+        page = string.Empty;
+        number = string.Empty;
+        if (string.IsNullOrEmpty(internalId)) return false;
+        foreach (var (prefix, pg) in FmpConventionMap)
+        {
+            if (internalId.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                var tail = internalId[prefix.Length..];
+                if (tail.Length == 0) return false;
+                page = pg;
+                number = tail;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The compendium id (<c>page+number</c>) an internal-id auto-resolves to
+    /// under the FMP url convention, or null. Convenience over
+    /// <see cref="TryFmpConventionMap"/> for callers that just need the id.
+    /// </summary>
+    public static string? FmpConventionCompendiumId(string? internalId) =>
+        TryFmpConventionMap(internalId, out var page, out var num) ? page + num : null;
 }

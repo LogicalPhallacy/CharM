@@ -18,49 +18,63 @@ public static class LocalPartStager
     /// Build an index catalog from every <c>.index</c> file under
     /// <paramref name="root"/> (recursive). Empty when no index files exist.
     /// </summary>
-    public static PartIndexCatalog BuildCatalog(string root)
+    public static PartIndexCatalog BuildCatalog(string root) => BuildCatalogAndIndexes(root).Catalog;
+
+    /// <summary>
+    /// Parse every <c>.index</c> under <paramref name="root"/> once, returning
+    /// both the categorization catalog and the parsed index documents (the
+    /// latter drive part load order). Malformed indexes are skipped.
+    /// </summary>
+    public static (PartIndexCatalog Catalog, IReadOnlyList<PartIndexDocument> Indexes) BuildCatalogAndIndexes(string root)
     {
         var catalog = new PartIndexCatalog();
-        if (!Directory.Exists(root)) return catalog;
+        var indexes = new List<PartIndexDocument>();
+        if (!Directory.Exists(root)) return (catalog, indexes);
 
         foreach (var indexPath in Directory.GetFiles(root, "*.index", SearchOption.AllDirectories)
                      .OrderBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase))
         {
             try
             {
-                var doc = System.Xml.Linq.XDocument.Load(indexPath);
-                catalog.Add(PartIndexDocument.Parse(doc, Path.GetFileName(indexPath)));
+                var doc = PartIndexDocument.Parse(System.Xml.Linq.XDocument.Load(indexPath), Path.GetFileName(indexPath));
+                indexes.Add(doc);
+                catalog.Add(doc);
             }
             catch { /* malformed index: skip, parts fall back to folder categorization */ }
         }
-        return catalog;
+        return (catalog, indexes);
     }
 
     /// <summary>
     /// Enumerate every <c>.part</c> file under <paramref name="root"/> (recursive)
     /// as staged tuples for <see cref="RulesDbLayerStore.Initialize"/>, resolving
-    /// each part's category + official flag from <paramref name="catalog"/>.
+    /// each part's category + official flag from <paramref name="catalog"/> and
+    /// ordering them by the shared index-driven load order
+    /// (<see cref="PartLoadOrder"/>).
     /// </summary>
     public static IReadOnlyList<(string Path, string PartId, string? Category, bool IsOfficial)> StageParts(
-        string root, PartIndexCatalog catalog)
+        string root, PartIndexCatalog catalog, IReadOnlyList<PartIndexDocument> indexes)
     {
-        var result = new List<(string, string, string?, bool)>();
+        var result = new List<(string Path, string PartId, string? Category, bool IsOfficial)>();
         if (!Directory.Exists(root)) return result;
 
-        foreach (var f in Directory.GetFiles(root, "*.part", SearchOption.AllDirectories)
-                     .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase))
+        foreach (var f in Directory.GetFiles(root, "*.part", SearchOption.AllDirectories))
         {
             string filename = Path.GetFileName(f);
             string? category = catalog.CategoryFor(filename, FolderFallback(f));
             bool official = catalog.IsOfficial(filename);
             result.Add((f, filename, category, official));
         }
-        return result;
+
+        return PartLoadOrder.Order(result, t => t.Path, indexes);
     }
 
     /// <summary>Convenience: build the catalog and stage in one call.</summary>
     public static IReadOnlyList<(string Path, string PartId, string? Category, bool IsOfficial)> Stage(string root)
-        => StageParts(root, BuildCatalog(root));
+    {
+        var (catalog, indexes) = BuildCatalogAndIndexes(root);
+        return StageParts(root, catalog, indexes);
+    }
 
     /// <summary>The immediate parent folder name when it's a known content folder, else null.</summary>
     private static string? FolderFallback(string partPath)

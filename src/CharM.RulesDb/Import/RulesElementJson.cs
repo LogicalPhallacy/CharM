@@ -34,4 +34,38 @@ internal static class RulesElementJson
 
         return (fieldsJson, rulesJson);
     }
+
+    /// <summary>
+    /// Deserialize a <c>fields_json</c> column value into its ordered list of
+    /// (name, value) field entries, accepting both the current array-of-pairs
+    /// format and the legacy object format. Shared so every reader/writer of
+    /// the column agrees on the two on-disk shapes (prevents parser drift).
+    /// </summary>
+    public static List<KeyValuePair<string, string>> DeserializeEntries(string? fieldsJson)
+    {
+        var entries = new List<KeyValuePair<string, string>>();
+        if (string.IsNullOrEmpty(fieldsJson)) return entries;
+
+        int i = 0;
+        while (i < fieldsJson.Length && char.IsWhiteSpace(fieldsJson[i])) i++;
+        bool isArray = i < fieldsJson.Length && fieldsJson[i] == '[';
+
+        if (isArray)
+        {
+            var pairs = JsonSerializer.Deserialize<List<KeyValuePair<string, string>>>(fieldsJson) ?? [];
+            entries.AddRange(pairs);
+        }
+        else
+        {
+            var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(fieldsJson) ?? new();
+            foreach (var kv in dict)
+                entries.Add(new(kv.Key, kv.Value));
+        }
+
+        return entries;
+    }
+
+    /// <summary>Serialize an ordered list of field entries back to the array-of-pairs column format, or null when empty.</summary>
+    public static string? SerializeEntries(IReadOnlyList<KeyValuePair<string, string>> entries) =>
+        entries.Count > 0 ? JsonSerializer.Serialize(entries) : null;
 }

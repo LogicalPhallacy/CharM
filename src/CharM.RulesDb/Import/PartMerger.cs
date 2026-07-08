@@ -341,21 +341,29 @@ public static partial class PartMerger
     {
         int count = 0;
 
-        var newDirectives = new List<RuleDirective>();
-        var newCategories = new List<string>();
-
+        // Route every child through the shared assembler so the append path
+        // handles <specific>/<Flavor>/<prereqs>/<print-prereqs> identically to
+        // the create path. Before this, AppendNodes silently dropped <specific>
+        // (and Flavor/prereqs) and never wrote fields_json — a data-loss bug.
+        var asm = new RulesElementAssembler();
         foreach (var child in appendEl.Elements())
-        {
-            switch (child.Name.LocalName)
-            {
-                case "rules":
-                    ParseRulesBlock(child, newDirectives);
-                    break;
-                case "Category":
-                    ParseCategories(child, newCategories);
-                    break;
-            }
-        }
+            asm.HandleChild(new XElementChildNode(child));
+
+        // Name/type are irrelevant for an append (the target already exists);
+        // pass the append node's own attrs for completeness. Description is not
+        // synthesized because no mixed-content text was fed to the assembler.
+        var appended = asm.Build(
+            internalId,
+            Attr(appendEl, "name") ?? string.Empty,
+            Attr(appendEl, "type") ?? string.Empty,
+            Attr(appendEl, "source"));
+
+        var newDirectives = appended.Element.Rules;
+        var newCategories = appended.Categories;
+        var newFieldEntries = appended.Element.FieldEntries;
+
+        if (newFieldEntries.Count > 0)
+            count += AppendFields(conn, tx, internalId, newFieldEntries);
 
         if (newDirectives.Count > 0)
         {
@@ -392,6 +400,53 @@ public static partial class PartMerger
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// Merge appended field entries (from an <c>AppendNodes</c> block's
+    /// <c>&lt;specific&gt;</c>/<c>&lt;Flavor&gt;</c>/… children) into an
+    /// element's <c>fields_json</c>. Idempotent: an identical (name, value)
+    /// pair already present is not appended again, so re-merging the same part
+    /// doesn't grow the column.
+    /// </summary>
+    private static int AppendFields(
+        SqliteConnection conn, SqliteTransaction tx, string internalId,
+        IReadOnlyList<KeyValuePair<string, string>> newEntries)
+    {
+        string? existingJson = ReadFieldsJson(conn, tx, internalId);
+        var entries = RulesElementJson.DeserializeEntries(existingJson);
+
+        var seen = new HashSet<(string, string)>();
+        foreach (var e in entries) seen.Add((e.Key, e.Value));
+
+        int addedCount = 0;
+        foreach (var e in newEntries)
+        {
+            if (seen.Add((e.Key, e.Value)))
+            {
+                entries.Add(e);
+                addedCount++;
+            }
+        }
+
+        if (addedCount == 0) return 0;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "UPDATE rules_elements SET fields_json = $fields WHERE internal_id = $id";
+        cmd.Parameters.AddWithValue("$fields", (object?)RulesElementJson.SerializeEntries(entries) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$id", internalId);
+        return cmd.ExecuteNonQuery() > 0 ? addedCount : 0;
+    }
+
+    private static string? ReadFieldsJson(SqliteConnection conn, SqliteTransaction tx, string internalId)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT fields_json FROM rules_elements WHERE internal_id = $id";
+        cmd.Parameters.AddWithValue("$id", internalId);
+        var result = cmd.ExecuteScalar();
+        return result is DBNull or null ? null : (string)result;
     }
 
     private static string? ReadRulesJson(SqliteConnection conn, SqliteTransaction tx, string internalId)
@@ -479,14 +534,6 @@ public static partial class PartMerger
         public string? Attr(string name) => el.Attribute(name)?.Value;
         public string GetTextContent() => el.Value.Trim();
         public void ParseRulesBlockInto(List<RuleDirective> rules) => ParseRulesBlock(el, rules);
-    }
-
-    private static void ParseCategories(XElement categoryEl, List<string> categories)
-    {
-        string content = categoryEl.Value.Trim();
-        if (string.IsNullOrWhiteSpace(content)) return;
-        foreach (var cat in content.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            categories.Add(cat);
     }
 
     private static void ParseRulesBlock(XElement rulesEl, List<RuleDirective> rules)

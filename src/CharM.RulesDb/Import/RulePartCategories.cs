@@ -14,6 +14,9 @@ public static class RulePartCategories
     public const string Homebrew = "Homebrew";
     public const string ThirdParty = "3rdParty";
 
+    /// <summary>The category of the official WotC index (<c>WotC.index</c>).</summary>
+    public const string Wotc = "WotC";
+
     /// <summary>The cbparts content folders (excluding the synthetic <c>base</c>).</summary>
     public static readonly string[] ContentFolders = [Sorted, UnearthedArcana, Homebrew, ThirdParty];
 

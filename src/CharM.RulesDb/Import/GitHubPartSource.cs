@@ -40,7 +40,7 @@ public sealed class GitHubPartSource : IPartSource
 
     public async Task<IReadOnlyList<RemotePartInfo>> ListAsync(CancellationToken cancellationToken = default)
     {
-        var catalog = await BuildIndexCatalogAsync(cancellationToken);
+        var (catalog, indexes) = await BuildIndexCatalogAsync(cancellationToken);
 
         var parts = new List<RemotePartInfo>();
         foreach (var folder in _folders)
@@ -66,18 +66,24 @@ public sealed class GitHubPartSource : IPartSource
                 });
             }
         }
-        return parts;
+
+        // Load order: WotC → Unearthed Arcana → other indexes alphabetically,
+        // parts alphabetical within each index (shared with every source).
+        return PartLoadOrder.Order(parts, p => p.Filename, indexes);
     }
 
     /// <summary>
-    /// Build a <see cref="PartIndexCatalog"/> from the repo's <c>indexes/</c>
-    /// folder so parts can be categorized by the content pack (index) they
-    /// belong to rather than by their physical folder. Missing folder → empty
-    /// catalog (parts fall back to folder categorization).
+    /// Build a <see cref="PartIndexCatalog"/> (+ the parsed index documents that
+    /// drive load order) from the repo's <c>indexes/</c> folder so parts can be
+    /// categorized and ordered by the content pack (index) they belong to rather
+    /// than by their physical folder. Missing folder → empty catalog (parts fall
+    /// back to folder categorization and alphabetical order).
     /// </summary>
-    private async Task<PartIndexCatalog> BuildIndexCatalogAsync(CancellationToken cancellationToken)
+    private async Task<(PartIndexCatalog Catalog, IReadOnlyList<PartIndexDocument> Indexes)> BuildIndexCatalogAsync(
+        CancellationToken cancellationToken)
     {
         var catalog = new PartIndexCatalog();
+        var indexes = new List<PartIndexDocument>();
         var entries = await ListFolderAsync(IndexesFolder, cancellationToken);
         foreach (var e in entries
                      .Where(e => string.Equals(e.Type, "file", StringComparison.OrdinalIgnoreCase))
@@ -86,9 +92,9 @@ public sealed class GitHubPartSource : IPartSource
                      .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
         {
             var doc = await PartIndexFetcher.FetchIndexAsync(_http, new Uri(e.DownloadUrl!), cancellationToken);
-            if (doc is not null) catalog.Add(doc);
+            if (doc is not null) { indexes.Add(doc); catalog.Add(doc); }
         }
-        return catalog;
+        return (catalog, indexes);
     }
 
     private async Task<IReadOnlyList<GitHubContentEntry>> ListFolderAsync(string folder, CancellationToken cancellationToken)

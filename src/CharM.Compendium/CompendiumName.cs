@@ -109,4 +109,20 @@ public static class CompendiumName
             if (variant == target) return true;
         return false;
     }
+
+    /// <summary>
+    /// True when two compendium names are equivalent: equal after normalization,
+    /// or one is a prefix of the other and the shorter is long enough to be a
+    /// truncation (the SQL dump stores Name as varchar(50), so long names get
+    /// cut off). Shared by the source-to-source <c>compare</c> and the superset
+    /// builder so both judge name divergence identically.
+    /// </summary>
+    public static bool Equivalent(string? a, string? b)
+    {
+        var na = Normalize(a);
+        var nb = Normalize(b);
+        if (na == nb) return true;
+        var (shorter, longer) = na.Length <= nb.Length ? (na, nb) : (nb, na);
+        return shorter.Length >= 40 && longer.StartsWith(shorter, StringComparison.Ordinal);
+    }
 }

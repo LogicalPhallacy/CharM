@@ -28,7 +28,8 @@ public sealed class CbloaderHostPartSource : IPartSource
     public async Task<IReadOnlyList<RemotePartInfo>> ListAsync(CancellationToken cancellationToken = default)
     {
         var versions = await LoadVersionsAsync(cancellationToken);
-        var entries = await LoadIndexAsync(cancellationToken);
+        var index = await LoadIndexAsync(cancellationToken);
+        var entries = index?.Parts ?? [];
 
         var parts = new List<RemotePartInfo>();
         foreach (var (filename, address) in entries)
@@ -64,7 +65,10 @@ public sealed class CbloaderHostPartSource : IPartSource
             }
         }
 
-        return parts;
+        // Load order: parts alphabetical within the index (shared with every
+        // source). The host serves a single official index, so this orders its
+        // parts alphabetically; unindexed fallbacks follow alphabetically.
+        return PartLoadOrder.Order(parts, p => p.Filename, index is null ? [] : [index]);
     }
 
     public async Task<byte[]> DownloadAsync(RemotePartInfo part, CancellationToken cancellationToken = default)
@@ -88,22 +92,20 @@ public sealed class CbloaderHostPartSource : IPartSource
         return map;
     }
 
-    private async Task<List<(string Filename, string Address)>> LoadIndexAsync(CancellationToken ct)
+    private async Task<PartIndexDocument?> LoadIndexAsync(CancellationToken ct)
     {
-        var result = new List<(string, string)>();
         foreach (var indexName in new[] { "WotC.index", "index.xml" })
         {
             try
             {
                 var xml = await _http.GetStringAsync(new Uri(_base, indexName), ct);
-                var doc = XDocument.Parse(xml);
-                result.AddRange(PartIndexReader.ReadPartEntries(doc));
-                if (result.Count > 0) return result;
+                var doc = PartIndexDocument.Parse(XDocument.Parse(xml), indexName);
+                if (doc.Parts.Count > 0) return doc;
             }
             catch (HttpRequestException) { /* try next index name */ }
             catch (System.Xml.XmlException) { /* malformed; try next */ }
         }
-        return result;
+        return null;
     }
 
     private static string? CategoryFromAddress(string address)

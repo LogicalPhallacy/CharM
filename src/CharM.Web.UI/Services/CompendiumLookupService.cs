@@ -39,6 +39,18 @@ public sealed class CompendiumLookupService
     {
         if (element is null || _engine.Value is not { } e) return null;
 
+        // Strategy: an explicit "compendiumid" specific (added by the
+        // compendiumid part file for elements whose internal-id doesn't carry
+        // the correct compendium number) wins over heuristic matching; fall
+        // back to the id/name matcher only when it's absent or resolves nothing.
+        if (element.Fields.TryGetValue("compendiumid", out var cid) &&
+            CompendiumIdMapper.SplitCompendiumId(cid?.Trim(), out var cidCategory, out _))
+        {
+            var cidBody = e.Reader.GetBody(cidCategory, cid!.Trim());
+            if (!string.IsNullOrEmpty(cidBody))
+                return new CompendiumBody(cid.Trim(), cidCategory, CompendiumMatchKind.IdOnly, cidBody);
+        }
+
         var match = e.Matcher.Match(element.InternalId, element.Name, element.Type);
         if (match.CompendiumId is null || match.Category is null) return null;
 

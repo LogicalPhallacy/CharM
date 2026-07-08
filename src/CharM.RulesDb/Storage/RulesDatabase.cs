@@ -706,36 +706,13 @@ public sealed class RulesDatabase : IRulesDatabase
     private static (Dictionary<string, string> Fields, IReadOnlyList<KeyValuePair<string, string>> Entries) ParseFieldsJson(string? fieldsJson)
     {
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var entries = new List<KeyValuePair<string, string>>();
+        var entries = CharM.RulesDb.Import.RulesElementJson.DeserializeEntries(fieldsJson);
 
-        if (string.IsNullOrEmpty(fieldsJson))
-            return (fields, entries);
-
-        // Sniff first non-whitespace character to disambiguate the two formats.
-        int i = 0;
-        while (i < fieldsJson.Length && char.IsWhiteSpace(fieldsJson[i])) i++;
-        bool isArray = i < fieldsJson.Length && fieldsJson[i] == '[';
-
-        if (isArray)
-        {
-            var pairs = JsonSerializer.Deserialize<List<KeyValuePair<string, string>>>(fieldsJson) ?? [];
-            foreach (var pair in pairs)
-            {
-                entries.Add(pair);
-                if (!fields.ContainsKey(pair.Key))
-                    fields[pair.Key] = pair.Value;
-            }
-        }
-        else
-        {
-            var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(fieldsJson) ?? new();
-            foreach (var kv in dict)
-            {
-                entries.Add(new(kv.Key, kv.Value));
-                if (!fields.ContainsKey(kv.Key))
-                    fields[kv.Key] = kv.Value;
-            }
-        }
+        // First-wins lookup (OCB RulesElementField behavior); entries preserves
+        // every occurrence in document order for duplicate-name fields.
+        foreach (var pair in entries)
+            if (!fields.ContainsKey(pair.Key))
+                fields[pair.Key] = pair.Value;
 
         return (fields, entries);
     }
