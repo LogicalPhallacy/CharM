@@ -557,12 +557,31 @@ public sealed class RulesDatabaseService : IRulesDatabase
             // setup wizard.
             await rebuildToTempPath(tempPath, progress);
 
+            // The activation phase used to run under a single "Activating
+            // rebuilt database" label, which hid where its several blocking
+            // sub-steps spent their time. Report each sub-step with a running
+            // elapsed count so a slow one is immediately visible in the UI.
+            var activateStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            void ActivationStep(string detail) =>
+                SetProgress(new DbBuildProgress(
+                    "Activating rebuilt database",
+                    Detail: $"{detail} (+{activateStopwatch.ElapsedMilliseconds} ms)"));
+
             // Fold the new DB's WAL into a single self-contained file pre-swap.
+            ActivationStep("finalizing new database (WAL checkpoint)");
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             CheckpointWal(tempPath);
 
-            // Fast phase: gate readers only for the millisecond file swap.
-            SetProgress(new DbBuildProgress("Activating rebuilt database"));
+            // Stop the (now-stale) background hash of the OUTGOING database and
+            // wait for it to release its read handle. This can cost up to a few
+            // seconds; do it BEFORE gating readers so its cooperative-cancel
+            // wait doesn't hold every concurrent DB query blocked on
+            // _notRebuilding.
+            ActivationStep("stopping background verification");
+            CancelBackgroundHash();
+
+            // Fast phase: gate readers only for the file swap + reopen.
+            ActivationStep("releasing current database");
             RulesDatabase? old;
             lock (_sync)
             {
@@ -571,13 +590,12 @@ public sealed class RulesDatabaseService : IRulesDatabase
                 _current = null;
             }
             old?.Dispose();
-            // Stop the (now-stale) background hash so it releases its read
-            // handle on the working DB before we replace the file.
-            CancelBackgroundHash();
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             try
             {
+                ActivationStep("swapping database file");
                 SwapDatabaseFile(dbPath, tempPath);
+                ActivationStep("reopening database");
                 if (!TryOpen(dbPath, out var error))
                     throw new InvalidOperationException(error);
             }
@@ -585,6 +603,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
             {
                 _notRebuilding.Set();
             }
+            ActivationStep("activation complete");
         }
         finally
         {

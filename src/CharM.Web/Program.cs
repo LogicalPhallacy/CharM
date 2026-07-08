@@ -19,6 +19,19 @@ builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions>(options =>
     options.MaximumReceiveMessageSize = 4L * 1024L * 1024L;
 });
 
+// Blazor Server keeps a WebSocket open per connected browser tab. On Ctrl-C,
+// Kestrel's graceful shutdown waits for active connections to drain, but an
+// idle-but-open circuit WebSocket does not close until the browser itself
+// disconnects — so with a tab still open the host otherwise sits for the full
+// default 30s HostOptions.ShutdownTimeout before exiting (closing the tab makes
+// shutdown immediate). Shorten the timeout so Ctrl-C returns promptly; there is
+// no critical server-side state to flush on exit (the rules DB and character
+// files are written synchronously as operations happen).
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.ShutdownTimeout = TimeSpan.FromSeconds(3);
+});
+
 builder.Services.AddCharmCoreServices();
 
 var app = builder.Build();
