@@ -45,6 +45,19 @@ public sealed record PowerWeaponStatLine(
 
 public sealed record PowerBodyEntry(string Label, string Text, string LabelClass);
 
+/// <summary>Kind of a parsed body-entry segment.</summary>
+public enum PowerEntrySegmentKind { Text, Table }
+
+/// <summary>
+/// One segment of a power body entry: either a run of prose or an embedded
+/// table (rows of cells). Produced by
+/// <see cref="PowerCardFactory.ParseEntrySegments"/>.
+/// </summary>
+public sealed record PowerEntrySegment(
+    PowerEntrySegmentKind Kind,
+    string Text,
+    IReadOnlyList<IReadOnlyList<string>>? Rows);
+
 /// <summary>
 /// Render-model for a single power card, shared between the Powers page
 /// and the choice-modal preview. Section-aware styling classes drive the
@@ -60,7 +73,18 @@ public sealed partial class PowerDisplayCard
     public string? Action { get; init; }
     public string? Flavor { get; init; }
     public string? KeywordsText { get; init; }
+
+    /// <summary>Source book this power comes from (e.g. "Player's Handbook").</summary>
+    public string? Source { get; init; }
+
     public bool IsHouseruled { get; init; }
+
+    /// <summary>
+    /// Rulebook-style citation for display in the small bottom-right corner of a
+    /// card. The rules database carries no page numbers, so this is the source
+    /// book name only — we never fabricate a page reference.
+    /// </summary>
+    public string? SourceCite => string.IsNullOrWhiteSpace(Source) ? null : Source;
     public required List<PowerStatLine> ListStats { get; init; }
     public required List<PowerStatLine> PrintStats { get; init; }
     public required List<PowerWeaponStatLine> WeaponStats { get; init; }
@@ -354,6 +378,7 @@ public static partial class PowerCardFactory
                 CleanFieldText(power.Fields.GetValueOrDefault("Flavor")),
                 CleanFieldText(power.Fields.GetValueOrDefault("Short Description"))),
             KeywordsText = keywordsText,
+            Source = power.Source,
             ListStats = listStats,
             PrintStats = printStats,
             WeaponStats = weaponStats,
@@ -382,7 +407,7 @@ public static partial class PowerCardFactory
 
     private static void AddEntry(List<PowerBodyEntry> entries, string label, string? text, string labelClass = "")
     {
-        string? cleaned = CleanFieldText(text);
+        string? cleaned = CleanEntryText(text);
         if (!string.IsNullOrWhiteSpace(cleaned))
             entries.Add(new PowerBodyEntry(label, cleaned, labelClass));
     }
@@ -762,6 +787,88 @@ public static partial class PowerCardFactory
         return WhitespaceRegex().Replace(cleaned, " ").Trim();
     }
 
+    /// <summary>
+    /// Clean a body-entry field the same way as <see cref="CleanFieldText"/> but
+    /// preserve any <c>&lt;table&gt;...&lt;/table&gt;</c> blocks verbatim (their
+    /// internal newlines / tabs are the row / column delimiters that
+    /// <see cref="ParseEntrySegments"/> relies on to render an actual table).
+    /// Prose outside the table blocks is still collapsed to single spaces.
+    /// </summary>
+    private static string? CleanEntryText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        if (!text.Contains("<table>", StringComparison.OrdinalIgnoreCase))
+            return CleanFieldText(text);
+
+        var result = new System.Text.StringBuilder();
+        int pos = 0;
+        foreach (Match m in TableBlockRegex().Matches(text))
+        {
+            string before = CleanFieldText(text[pos..m.Index]) ?? string.Empty;
+            if (before.Length > 0)
+            {
+                if (result.Length > 0) result.Append(' ');
+                result.Append(before);
+            }
+            if (result.Length > 0) result.Append(' ');
+            result.Append(m.Value.Trim());
+            pos = m.Index + m.Length;
+        }
+        string tail = CleanFieldText(text[pos..]) ?? string.Empty;
+        if (tail.Length > 0)
+        {
+            if (result.Length > 0) result.Append(' ');
+            result.Append(tail);
+        }
+
+        string final = result.ToString().Trim();
+        return final.Length > 0 ? final : null;
+    }
+
+    /// <summary>
+    /// Split a cleaned body-entry text into prose and table segments so a
+    /// renderer can emit real <c>&lt;table&gt;</c> markup for embedded tables
+    /// (e.g. Hunter's Quarry's damage-by-level table). Table rows are
+    /// newline-separated and cells tab-separated; leading empty cells mark
+    /// continuation rows in the source data.
+    /// </summary>
+    public static IReadOnlyList<PowerEntrySegment> ParseEntrySegments(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Array.Empty<PowerEntrySegment>();
+
+        if (!text.Contains("<table>", StringComparison.OrdinalIgnoreCase))
+            return [new PowerEntrySegment(PowerEntrySegmentKind.Text, text.Trim(), null)];
+
+        var segments = new List<PowerEntrySegment>();
+        int pos = 0;
+        foreach (Match m in TableBlockRegex().Matches(text))
+        {
+            string before = text[pos..m.Index].Trim();
+            if (before.Length > 0)
+                segments.Add(new PowerEntrySegment(PowerEntrySegmentKind.Text, before, null));
+
+            string body = m.Groups[1].Value;
+            var rows = body
+                .Replace("\r", string.Empty, StringComparison.Ordinal)
+                .Split('\n')
+                .Where(line => line.Trim().Length > 0)
+                .Select(line => (IReadOnlyList<string>)line.Split('\t').Select(cell => cell.Trim()).ToList())
+                .ToList();
+            if (rows.Count > 0)
+                segments.Add(new PowerEntrySegment(PowerEntrySegmentKind.Table, string.Empty, rows));
+
+            pos = m.Index + m.Length;
+        }
+        string tail = text[pos..].Trim();
+        if (tail.Length > 0)
+            segments.Add(new PowerEntrySegment(PowerEntrySegmentKind.Text, tail, null));
+
+        return segments;
+    }
+
     private static string? SummarizeText(string? text, int maxLength)
     {
         string? cleaned = CleanFieldText(text);
@@ -813,4 +920,7 @@ public static partial class PowerCardFactory
 
     [GeneratedRegex(@"^\d*d\d+(?:\s*[+-]\s*\d+)?", RegexOptions.IgnoreCase)]
     private static partial Regex DicePrefixRegex();
+
+    [GeneratedRegex(@"<table>(.*?)</table>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex TableBlockRegex();
 }

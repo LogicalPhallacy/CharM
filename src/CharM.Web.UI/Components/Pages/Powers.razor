@@ -294,35 +294,7 @@ else
                                     </div>
                                     @if (!IsCardCollapsed(card.InternalId))
                                     {
-                                    <div class="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white power-card-content">
-                                        @foreach (var stat in card.ListStats)
-                                        {
-                                            <div class="space-y-1">
-                                                <span class="font-label text-[10px] uppercase text-outline tracking-wider">@stat.Label</span>
-                                                <p class="font-body font-bold text-sm @(stat.Label == "Keywords" ? "italic" : string.Empty)">
-                                                    <PowerStatLineValue Line="stat" PowerName="@card.Name" />
-                                                </p>
-                                            </div>
-                                        }
-                                        <PowerWeaponStatsTable Card="card" />
-                                        <div class="col-span-full pt-2 border-t border-surface-container mt-2">
-                                            @if (!string.IsNullOrWhiteSpace(card.Flavor))
-                                            {
-                                                <p class="text-sm leading-relaxed text-on-surface-variant italic">@card.Flavor</p>
-                                            }
-                                            @if (card.Entries.Count > 0)
-                                            {
-                                                <div class="space-y-2 @(!string.IsNullOrWhiteSpace(card.Flavor) ? "mt-2" : string.Empty)">
-                                                    @foreach (var entry in card.Entries)
-                                                    {
-                                                        <p class="text-sm leading-relaxed">
-                                                            <strong class="font-bold @entry.LabelClass">@entry.Label:</strong> @entry.Text
-                                                        </p>
-                                                    }
-                                                </div>
-                                            }
-                                        </div>
-                                    </div>
+                                    <PowerCardBody Card="card" />
                                     }
                                 </div>
                             }
@@ -424,35 +396,7 @@ else
                                     </div>
                                     @if (!IsCardCollapsed(card.InternalId))
                                     {
-                                    <div class="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white power-card-content">
-                                        @foreach (var stat in card.ListStats)
-                                        {
-                                            <div class="space-y-1">
-                                                <span class="font-label text-[10px] uppercase text-outline tracking-wider">@stat.Label</span>
-                                                <p class="font-body font-bold @(stat.Label == "Hit" ? "text-xs leading-tight" : "text-sm")">
-                                                    <PowerStatLineValue Line="stat" PowerName="@card.Name" />
-                                                </p>
-                                            </div>
-                                        }
-                                        <PowerWeaponStatsTable Card="card" />
-                                        <div class="col-span-full pt-2 border-t border-surface-container mt-2">
-                                            @if (!string.IsNullOrWhiteSpace(card.Flavor))
-                                            {
-                                                <p class="text-sm leading-relaxed text-on-surface-variant italic">@card.Flavor</p>
-                                            }
-                                            @if (card.Entries.Count > 0)
-                                            {
-                                                <div class="space-y-2 @(!string.IsNullOrWhiteSpace(card.Flavor) ? "mt-2" : string.Empty)">
-                                                    @foreach (var entry in card.Entries)
-                                                    {
-                                                        <p class="text-sm leading-relaxed">
-                                                            <strong class="font-bold @entry.LabelClass">@entry.Label:</strong> @entry.Text
-                                                        </p>
-                                                    }
-                                                </div>
-                                            }
-                                        </div>
-                                    </div>
+                                    <PowerCardBody Card="card" />
                                     }
                                 </div>
                                 </div>
@@ -574,31 +518,7 @@ else
                                     </div>
                                     @if (!IsCardCollapsed(card.InternalId))
                                     {
-                                    <div class="p-5 bg-white power-card-content">
-                                        <div class="grid grid-cols-2 gap-4 mb-4">
-                                            @foreach (var stat in card.ListStats)
-                                            {
-                                                <div class="space-y-1">
-                                                    <span class="font-label text-[10px] uppercase text-outline tracking-wider">@stat.Label</span>
-                                                    <p class="font-body font-bold text-sm @(stat.Label == "Keywords" ? "italic" : string.Empty)">
-                                                        <PowerStatLineValue Line="stat" PowerName="@card.Name" />
-                                                    </p>
-                                                </div>
-                                            }
-                                        </div>
-                                        <PowerWeaponStatsTable Card="card" />
-                                        @if (card.Entries.Count > 0)
-                                        {
-                                            <div class="pt-4 border-t border-surface-container space-y-2">
-                                                @foreach (var entry in card.Entries)
-                                                {
-                                                    <p class="text-sm leading-relaxed">
-                                                        <strong class="font-bold @entry.LabelClass">@entry.Label:</strong> @entry.Text
-                                                    </p>
-                                                }
-                                            </div>
-                                        }
-                                    </div>
+                                    <PowerCardBody Card="card" />
                                     }
                                 </div>
                             }
@@ -682,11 +602,13 @@ else
                                         <div class="space-y-2">
                                             @foreach (var entry in card.Entries)
                                             {
-                                                <p class="text-sm leading-relaxed">
-                                                    <strong class="font-bold @entry.LabelClass">@entry.Label:</strong> @entry.Text
-                                                </p>
+                                                <PowerEntryText Entry="entry" Class="text-sm leading-relaxed" />
                                             }
                                         </div>
+                                        @if (!string.IsNullOrWhiteSpace(card.SourceCite))
+                                        {
+                                            <div class="text-right text-[9px] text-outline/60 italic mt-2 leading-none">@card.SourceCite</div>
+                                        }
                                     </div>
                                     }
                                 </div>
@@ -826,11 +748,13 @@ else
                                 <div class="space-y-2 text-[11px] leading-tight @(card.PrintStats.Count > 0 ? "border-t border-surface-container pt-2" : "pt-2")">
                                     @foreach (var entry in card.Entries.Take(3))
                                     {
-                                        <p>
-                                            <strong class="font-bold @entry.LabelClass">@entry.Label:</strong> @entry.Text
-                                        </p>
+                                        <PowerEntryText Entry="entry" />
                                     }
                                 </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(card.SourceCite))
+                            {
+                                <div class="mt-auto pt-1 text-[8px] text-outline/60 italic text-right leading-none">@card.SourceCite</div>
                             }
                         </div>
                     </div>

@@ -1,0 +1,48 @@
+@* Single-source renderer for one power body entry (label + text). Handles
+   embedded <table> blocks (e.g. Hunter's Quarry) by emitting real table
+   markup. Used by every power-card render path — the shared PowerCardBody,
+   the Powers-page print grid, and the PrintSheet power cards — so table
+   support and entry formatting only live in one place. *@
+
+<div class="@Class">
+    <strong class="font-bold @Entry.LabelClass">@Entry.Label:</strong>
+    @foreach (var segment in Segments)
+    {
+        if (segment.Kind == PowerEntrySegmentKind.Table && segment.Rows is { Count: > 0 } rows)
+        {
+            <table class="power-entry-table w-full border-collapse my-1 text-[0.9em] leading-tight">
+                @for (int r = 0; r < rows.Count; r++)
+                {
+                    <tr>
+                        @foreach (var cell in rows[r])
+                        {
+                            @if (r == 0)
+                            {
+                                <th class="border border-outline/40 px-1 py-0.5 text-left align-top font-bold">@cell</th>
+                            }
+                            else
+                            {
+                                <td class="border border-outline/40 px-1 py-0.5 align-top">@cell</td>
+                            }
+                        }
+                    </tr>
+                }
+            </table>
+        }
+        else if (!string.IsNullOrWhiteSpace(segment.Text))
+        {
+            <text> @segment.Text</text>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public PowerBodyEntry Entry { get; set; } = default!;
+
+    /// <summary>CSS class for the container line (font sizing per call site).</summary>
+    [Parameter] public string? Class { get; set; }
+
+    private IReadOnlyList<PowerEntrySegment> Segments
+        => PowerCardFactory.ParseEntrySegments(Entry.Text);
+}

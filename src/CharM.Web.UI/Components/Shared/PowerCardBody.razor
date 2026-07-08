@@ -1,0 +1,42 @@
+@* Shared standard power-card body: the 4-column stat grid, weapon-stats table,
+   flavor, body entries, and source citation. Used by the read-only PowerCard
+   (picker / magic-item / basic previews) AND the interactive At-Will, Encounter
+   and Daily cards on the Powers page, so their body markup never diverges.
+   Utility / Companion / Cantrip keep their own bespoke bodies by design. *@
+
+<div class="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white power-card-content">
+    @foreach (var stat in Card.ListStats)
+    {
+        <div class="space-y-1">
+            <span class="font-label text-[10px] uppercase text-outline tracking-wider">@stat.Label</span>
+            <p class="font-body font-bold @(stat.Label == "Hit" ? "text-xs leading-tight" : "text-sm") @(stat.Label == "Keywords" ? "italic" : string.Empty)">
+                <PowerStatLineValue Line="stat" PowerName="@Card.Name" />
+            </p>
+        </div>
+    }
+    <PowerWeaponStatsTable Card="Card" />
+    <div class="col-span-full pt-2 border-t border-surface-container mt-2">
+        @if (!string.IsNullOrWhiteSpace(Card.Flavor))
+        {
+            <p class="text-sm leading-relaxed text-on-surface-variant italic">@Card.Flavor</p>
+        }
+        @if (Card.Entries.Count > 0)
+        {
+            <div class="space-y-2 @(!string.IsNullOrWhiteSpace(Card.Flavor) ? "mt-2" : string.Empty)">
+                @foreach (var entry in Card.Entries)
+                {
+                    <PowerEntryText Entry="entry" Class="text-sm leading-relaxed" />
+                }
+            </div>
+        }
+        @if (!string.IsNullOrWhiteSpace(Card.SourceCite))
+        {
+            <div class="text-right text-[9px] text-outline/60 italic mt-2 leading-none">@Card.SourceCite</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public PowerDisplayCard Card { get; set; } = default!;
+}

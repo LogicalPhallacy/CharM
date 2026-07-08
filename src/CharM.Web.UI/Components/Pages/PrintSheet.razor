@@ -400,17 +400,25 @@
         font-size: 8.5pt;
         line-height: 1.25;
         padding: 1px 0;
-        /* Two-line clamp: allow wrapping to a second line, then truncate. */
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
         overflow: hidden;
     }
+    .build-entry .be-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; }
     .build-entry .name { font-weight: 700; }
+    .build-entry .src {
+        color: var(--ink-soft);
+        font-size: 6.5pt;
+        font-style: italic;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
     .build-entry .desc {
+        display: block;
         color: var(--ink-soft);
         font-size: 7.5pt;
         font-weight: 400;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .power-counts {
@@ -498,6 +506,7 @@
 
     .print-sheet.theme-bw .pcard-header { background: white; color: black; border-bottom: 1.5px solid black; }
     .print-sheet.theme-bw .pcard.daily .pcard-header { background: black; color: white; }
+    .print-sheet.theme-bw .pcard.encounter .pcard-header { background: #d9d9d9; color: black; border-bottom: 1.5px solid black; }
 
     .pcard-name {
         font-size: 10pt;
@@ -517,6 +526,8 @@
         padding: 5px 6px;
         overflow: hidden;
         font-size: 8pt;
+        display: flex;
+        flex-direction: column;
     }
 
     .pcard-stats {
@@ -535,6 +546,21 @@
 
     .pcard-entry { margin-bottom: 2px; }
     .pcard-entry strong { font-weight: 700; }
+
+    /* Source citation pinned to the bottom-right of each power card. */
+    .pcard-source {
+        margin-top: auto;
+        padding-top: 2px;
+        text-align: right;
+        font-size: 6pt;
+        font-style: italic;
+        color: var(--ink-soft);
+    }
+
+    /* Inline tables embedded in power text (e.g. Hunter's Quarry). */
+    .power-entry-table { font-size: 6.5pt; border-collapse: collapse; width: 100%; margin: 2px 0; }
+    .power-entry-table th, .power-entry-table td { border: 0.4pt solid var(--rule); padding: 0 2px; text-align: left; vertical-align: top; }
+    .print-sheet.theme-bw .power-entry-table th, .print-sheet.theme-bw .power-entry-table td { border-color: black; }
 
     /* ---- Cut marks (only when enabled) ------------------------------- */
     .print-sheet.cuts-on .pcard::before,
@@ -685,6 +711,7 @@
         padding: 2px 0;
         border-bottom: 1px dotted var(--rule-soft);
     }
+    .ritual-src { color: var(--ink-soft); font-size: 7pt; font-style: italic; margin-left: 6px; }
 
     .inv-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
     .inv-table th {
@@ -1073,14 +1100,7 @@ else
                                 <h3>Class Features</h3>
                                 @foreach (var elem in classFeatures)
                                 {
-                                    <div class="build-entry">
-                                        <span class="name">@elem.Name</span>
-                                        @{ var sd = GetShortDescription(elem); }
-                                        @if (!string.IsNullOrEmpty(sd))
-                                        {
-                                            <span class="desc"> — @sd</span>
-                                        }
-                                    </div>
+                                    <PrintChoiceEntry Element="elem" />
                                 }
                             </div>
                         }
@@ -1091,14 +1111,7 @@ else
                                 <h3>Racial Traits</h3>
                                 @foreach (var elem in racialTraits)
                                 {
-                                    <div class="build-entry">
-                                        <span class="name">@elem.Name</span>
-                                        @{ var sd = GetShortDescription(elem); }
-                                        @if (!string.IsNullOrEmpty(sd))
-                                        {
-                                            <span class="desc"> — @sd</span>
-                                        }
-                                    </div>
+                                    <PrintChoiceEntry Element="elem" />
                                 }
                             </div>
                         }
@@ -1109,14 +1122,7 @@ else
                                 <h3>Feats</h3>
                                 @foreach (var elem in feats)
                                 {
-                                    <div class="build-entry">
-                                        <span class="name">@elem.Name</span>
-                                        @{ var sd = GetShortDescription(elem); }
-                                        @if (!string.IsNullOrEmpty(sd))
-                                        {
-                                            <span class="desc"> — @sd</span>
-                                        }
-                                    </div>
+                                    <PrintChoiceEntry Element="elem" />
                                 }
                             </div>
                         }
@@ -1259,7 +1265,11 @@ else
                                     }
                                     @foreach (var entry in card.Entries.Take(4))
                                     {
-                                        <div class="pcard-entry"><strong>@entry.Label:</strong> @entry.Text</div>
+                                        <PowerEntryText Entry="entry" Class="pcard-entry" />
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(card.SourceCite))
+                                    {
+                                        <div class="pcard-source">@card.SourceCite</div>
                                     }
                                 </div>
                             </div>
@@ -1280,7 +1290,8 @@ else
                                     </div>
                                 }
                                 @if (card.WeaponStats.Count > 0) { <PowerWeaponStatsTable Card="card" /> }
-                                @foreach (var entry in card.Entries.Take(4)) { <div class="pcard-entry"><strong>@entry.Label:</strong> @entry.Text</div> }
+                                @foreach (var entry in card.Entries.Take(4)) { <PowerEntryText Entry="entry" Class="pcard-entry" /> }
+                                @if (!string.IsNullOrWhiteSpace(card.SourceCite)) { <div class="pcard-source">@card.SourceCite</div> }
                             </div>
                         </div>
                     }
@@ -1333,9 +1344,11 @@ else
                                 }
                                 @foreach (var entry in card.Entries.Take(4))
                                 {
-                                    <div class="pcard-entry">
-                                        <strong>@entry.Label:</strong> @entry.Text
-                                    </div>
+                                    <PowerEntryText Entry="entry" Class="pcard-entry" />
+                                }
+                                @if (!string.IsNullOrWhiteSpace(card.SourceCite))
+                                {
+                                    <div class="pcard-source">@card.SourceCite</div>
                                 }
                             </div>
                         </div>
@@ -1359,7 +1372,14 @@ else
                         @foreach (var entry in kindGroup.OrderBy(r => GetElementLevel(r.Element)).ThenBy(r => r.Element.Name))
                         {
                             <div class="ritual-row">
-                                <div>@entry.Element.Name</div>
+                                <div>
+                                    @entry.Element.Name
+                                    @{ var ritualSrc = GetSource(entry.Element); }
+                                    @if (!string.IsNullOrEmpty(ritualSrc))
+                                    {
+                                        <span class="ritual-src">@ritualSrc</span>
+                                    }
+                                </div>
                                 <div style="text-align:center;color:var(--ink-soft)">Lvl @GetElementLevel(entry.Element)</div>
                                 <div style="text-align:right;color:var(--ink-soft);font-size:8pt">@(entry.Quantity > 1 ? $"×{entry.Quantity}" : "")</div>
                             </div>
@@ -1538,23 +1558,21 @@ else
     private static int GetElementLevel(RulesElement element)
         => element.Fields.TryGetValue("Level", out var raw) && int.TryParse(raw, out var lvl) ? lvl : 0;
 
-    private string? GetShortDescription(RulesElement element)
+    /// <summary>
+    /// Resolve the source book for a build-choice / ritual element, falling back
+    /// to the database record for in-tree wrappers that don't carry the source
+    /// on the element itself. The rules data has no page numbers, so the
+    /// citation is the book name only.
+    /// </summary>
+    private string? GetSource(RulesElement element)
     {
-        // Resolve from the database so wrappers that don't carry the
-        // field on the in-tree element still surface their description.
-        var detail = (element.InternalId is { Length: > 0 } id
-            ? SessionService.GetElementDetails(id)
-            : null) ?? element;
+        if (!string.IsNullOrWhiteSpace(element.Source))
+            return element.Source;
 
-        if (detail.Fields.TryGetValue("Short Description", out var sd) && !string.IsNullOrWhiteSpace(sd))
-        {
-            // One-line clamp is enforced by CSS (white-space: nowrap +
-            // text-overflow: ellipsis), so we don't truncate here —
-            // the layout will trim with an ellipsis to whatever width
-            // the column has.
-            return sd;
-        }
-        return null;
+        var detail = element.InternalId is { Length: > 0 } id
+            ? SessionService.GetElementDetails(id)
+            : null;
+        return string.IsNullOrWhiteSpace(detail?.Source) ? null : detail!.Source;
     }
 
     private static string GetLootWeight(LootItem loot)

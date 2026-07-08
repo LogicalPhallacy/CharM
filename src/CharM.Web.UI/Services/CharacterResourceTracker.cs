@@ -12,6 +12,7 @@ public sealed class CharacterResourceTracker
     public CharacterResourceState GetState(CharacterSessionService sessionService)
     {
         EnsureSession(sessionService);
+        SyncLiveMaxes(sessionService);
         return _state;
     }
 
@@ -132,6 +133,47 @@ public sealed class CharacterResourceTracker
             MaxPowerPoints: maxPowerPoints,
             SpentPowerPoints: 0,
             FailedDeathSaves: 0);
+    }
+
+    /// <summary>
+    /// Re-read the character's maximum HP / surges / power points from the live
+    /// snapshot on every access. The session's <c>SessionVersion</c> only bumps
+    /// when the session object is replaced or cleared, so in-session edits
+    /// (choosing a class, setting ability scores, leveling up, feats) do NOT run
+    /// <see cref="EnsureSession"/>. Without this, the maxes stay pinned to
+    /// whatever they were when the session was first observed — typically 0,
+    /// before a class and ability scores exist — which is why the vitality panel
+    /// showed nothing while the print sheet (which recomputes from the snapshot
+    /// every render) was correct. Player-tracked deltas (damage taken, surges /
+    /// power points spent, death saves, temp HP) are preserved across the sync.
+    /// </summary>
+    private void SyncLiveMaxes(CharacterSessionService sessionService)
+    {
+        var snapshot = sessionService.Session?.GetPartialSnapshot();
+        if (snapshot is null)
+            return;
+
+        int maxHp = Math.Max(0, snapshot.GetStat("Hit Points"));
+        int maxSurges = Math.Max(0, snapshot.GetStat("Healing Surges"));
+        int maxPowerPoints = Math.Max(0, snapshot.GetStat("Power Points"));
+
+        if (maxHp == _state.MaxHp && maxSurges == _state.MaxSurges && maxPowerPoints == _state.MaxPowerPoints)
+            return;
+
+        // Preserve HP already lost to damage so a max-HP change (level up,
+        // Constitution bump, Toughness) moves current HP by the same amount
+        // instead of resetting the player's tracked damage.
+        int lostHp = _state.LostHp;
+
+        _state = _state with
+        {
+            MaxHp = maxHp,
+            CurrentHp = Math.Clamp(maxHp - lostHp, 0, maxHp),
+            MaxSurges = maxSurges,
+            SpentSurges = Math.Min(_state.SpentSurges, maxSurges),
+            MaxPowerPoints = maxPowerPoints,
+            SpentPowerPoints = Math.Min(_state.SpentPowerPoints, maxPowerPoints),
+        };
     }
 
     private void NotifyChanged() => Changed?.Invoke();
