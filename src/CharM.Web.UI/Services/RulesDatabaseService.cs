@@ -39,6 +39,12 @@ public sealed class RulesDatabaseService : IRulesDatabase
     // loop has exited and disposed its connection yet.
     private Task? _hashTask;
 
+    // Last successfully-observed element count. Served by Count during the brief
+    // in-place-rebuild window when _current is momentarily null, so a render
+    // that reads Count (e.g. RulesDatabaseStatusBadge) neither blocks on the
+    // rebuild gate nor throws while the connection is being swapped.
+    private int _lastKnownCount;
+
     public event Action? Changed;
 
     // Set once Dispose() begins. Guards Changed so a late event (background
@@ -468,7 +474,21 @@ public sealed class RulesDatabaseService : IRulesDatabase
         };
     }
 
-    public int Count => Current.Count;
+    /// <summary>
+    /// Element count of the loaded database. Non-blocking and rebuild-safe: it
+    /// never waits on the rebuild gate or throws, so components that read it
+    /// during render (e.g. the status badge) can't deadlock the dispatcher or
+    /// tear down the circuit while an in-place rebuild is swapping the
+    /// connection. During that momentary window it returns the last known count.
+    /// </summary>
+    public int Count
+    {
+        get
+        {
+            lock (_sync)
+                return _current?.Count ?? _lastKnownCount;
+        }
+    }
 
     /// <summary>
     /// Fully release the currently-loaded database: dispose the read connection
@@ -554,8 +574,15 @@ public sealed class RulesDatabaseService : IRulesDatabase
         {
             // Slow phase: build into a temp file. The live DB stays open and
             // serving reads the whole time, so nothing blocks or bounces to the
-            // setup wizard.
-            await rebuildToTempPath(tempPath, progress);
+            // setup wizard. ConfigureAwait(false) is load-bearing: this method is
+            // awaited from a Blazor component event, so without it the activation
+            // steps below resume on the renderer's dispatcher thread. The gated
+            // swap window (_notRebuilding reset) synchronously triggers a
+            // re-render (via SetProgress -> Changed) that reads the DB; if that
+            // ran on the same dispatcher thread it would wait on _notRebuilding
+            // for a Set() that only this thread can make -> self-deadlock. Running
+            // activation off the dispatcher keeps any such reader wait short.
+            await rebuildToTempPath(tempPath, progress).ConfigureAwait(false);
 
             // The activation phase used to run under a single "Activating
             // rebuilt database" label, which hid where its several blocking
@@ -707,6 +734,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         {
             old = _current;
             _current = database;
+            _lastKnownCount = database.Count;
             _databasePath = databasePath;
             ContentHash = null;
             ContentHashComputing = true;

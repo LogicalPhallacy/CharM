@@ -400,25 +400,17 @@
         font-size: 8.5pt;
         line-height: 1.25;
         padding: 1px 0;
+        /* Two-line clamp: allow wrapping to a second line, then truncate. */
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
         overflow: hidden;
     }
-    .build-entry .be-head { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; }
     .build-entry .name { font-weight: 700; }
-    .build-entry .src {
-        color: var(--ink-soft);
-        font-size: 6.5pt;
-        font-style: italic;
-        white-space: nowrap;
-        flex-shrink: 0;
-    }
     .build-entry .desc {
-        display: block;
         color: var(--ink-soft);
         font-size: 7.5pt;
         font-weight: 400;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
     }
 
     .power-counts {
@@ -1100,7 +1092,14 @@ else
                                 <h3>Class Features</h3>
                                 @foreach (var elem in classFeatures)
                                 {
-                                    <PrintChoiceEntry Element="elem" />
+                                    <div class="build-entry">
+                                        <span class="name">@elem.Name</span>
+                                        @{ var sd = GetShortDescription(elem); }
+                                        @if (!string.IsNullOrEmpty(sd))
+                                        {
+                                            <span class="desc"> — @sd</span>
+                                        }
+                                    </div>
                                 }
                             </div>
                         }
@@ -1111,7 +1110,14 @@ else
                                 <h3>Racial Traits</h3>
                                 @foreach (var elem in racialTraits)
                                 {
-                                    <PrintChoiceEntry Element="elem" />
+                                    <div class="build-entry">
+                                        <span class="name">@elem.Name</span>
+                                        @{ var sd = GetShortDescription(elem); }
+                                        @if (!string.IsNullOrEmpty(sd))
+                                        {
+                                            <span class="desc"> — @sd</span>
+                                        }
+                                    </div>
                                 }
                             </div>
                         }
@@ -1122,7 +1128,14 @@ else
                                 <h3>Feats</h3>
                                 @foreach (var elem in feats)
                                 {
-                                    <PrintChoiceEntry Element="elem" />
+                                    <div class="build-entry">
+                                        <span class="name">@elem.Name</span>
+                                        @{ var sd = GetShortDescription(elem); }
+                                        @if (!string.IsNullOrEmpty(sd))
+                                        {
+                                            <span class="desc"> — @sd</span>
+                                        }
+                                    </div>
                                 }
                             </div>
                         }
@@ -1557,6 +1570,23 @@ else
 
     private static int GetElementLevel(RulesElement element)
         => element.Fields.TryGetValue("Level", out var raw) && int.TryParse(raw, out var lvl) ? lvl : 0;
+
+    private string? GetShortDescription(RulesElement element)
+    {
+        // Resolve from the database so wrappers that don't carry the
+        // field on the in-tree element still surface their description.
+        var detail = (element.InternalId is { Length: > 0 } id
+            ? SessionService.GetElementDetails(id)
+            : null) ?? element;
+
+        if (detail.Fields.TryGetValue("Short Description", out var sd) && !string.IsNullOrWhiteSpace(sd))
+        {
+            // One-line clamp is enforced by CSS, so we don't truncate here —
+            // the layout trims with an ellipsis to whatever width the column has.
+            return sd;
+        }
+        return null;
+    }
 
     /// <summary>
     /// Resolve the source book for a build-choice / ritual element, falling back
