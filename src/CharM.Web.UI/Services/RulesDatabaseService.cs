@@ -1,4 +1,5 @@
 using CharM.Engine.Rules;
+using CharM.Engine.Selection;
 using CharM.RulesDb.Import;
 using CharM.RulesDb.Storage;
 
@@ -19,7 +20,46 @@ public sealed class RulesDatabaseService : IRulesDatabase
     private RulesDatabase? _current;
     private string? _databasePath;
 
+    // Signalled (set) when NOT rebuilding. During an in-place rebuild it is
+    // reset: the working rules.db is briefly closed and re-materialized, but the
+    // DB is logically still loaded. Query access waits on this instead of
+    // throwing, and IsLoaded stays true so the UI doesn't bounce to the setup
+    // wizard.
+    private readonly ManualResetEventSlim _notRebuilding = new(initialState: true);
+
+    // Cancels the in-flight background content-hash computation. The hash holds
+    // a read connection on the working DB for a couple of seconds; a fast
+    // rebuild must cancel it (the result is stale anyway) before swapping the
+    // file, or the open handle blocks the replace.
+    private CancellationTokenSource? _hashCts;
+
+    // The in-flight background content-hash task. Tracked so a rebuild can wait
+    // for it to actually release its (pooled) read connection before swapping
+    // the working file — cancelling the token alone doesn't guarantee the scan
+    // loop has exited and disposed its connection yet.
+    private Task? _hashTask;
+
+    // Last successfully-observed element count. Served by Count during the brief
+    // in-place-rebuild window when _current is momentarily null, so a render
+    // that reads Count (e.g. RulesDatabaseStatusBadge) neither blocks on the
+    // rebuild gate nor throws while the connection is being swapped.
+    private int _lastKnownCount;
+
     public event Action? Changed;
+
+    // Set once Dispose() begins. Guards Changed so a late event (background
+    // content-hash completion, or the teardown Unload) can't queue a render
+    // against an already-disposed circuit/service-provider — the
+    // ObjectDisposedException('IServiceProvider') seen on app exit.
+    private volatile bool _disposed;
+
+    /// <summary>Raise <see cref="Changed"/> unless the service is disposing.</summary>
+    private void RaiseChanged()
+    {
+        if (_disposed)
+            return;
+        Changed?.Invoke();
+    }
 
     public RulesDatabaseService()
         : this(RulesDatabasePathResolver.GetDefaultWorkingDirectory())
@@ -37,7 +77,9 @@ public sealed class RulesDatabaseService : IRulesDatabase
         get
         {
             lock (_sync)
-                return _current is not null;
+                // During an in-place rebuild _current is transiently null but the
+                // DB is still loaded — report true so the wizard doesn't appear.
+                return _current is not null || !_notRebuilding.IsSet;
         }
     }
 
@@ -68,6 +110,37 @@ public sealed class RulesDatabaseService : IRulesDatabase
     /// <summary>UTC timestamp when the current database was loaded by this service.</summary>
     public DateTime? LoadedAt { get; private set; }
 
+    private RulesVocabulary? _vocabulary;
+
+    /// <summary>
+    /// Game vocabulary (skills + key abilities, ...) projected from the loaded
+    /// rules database and cached until the database is swapped/rebuilt. Lets the
+    /// UI consume the actual loaded ruleset instead of hardcoded lists.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No database is loaded.</exception>
+    public RulesVocabulary Vocabulary
+    {
+        get
+        {
+            var cached = _vocabulary;
+            if (cached is not null)
+                return cached;
+
+            IRulesDatabase db;
+            lock (_sync)
+                db = _current ?? throw new InvalidOperationException("Load a rules database before using the vocabulary.");
+
+            var built = RulesVocabulary.Build(db);
+            lock (_sync)
+            {
+                // Only cache if the database hasn't been swapped while building.
+                if (ReferenceEquals(_current, db))
+                    _vocabulary = built;
+            }
+            return built;
+        }
+    }
+
     public string? StatusMessage { get; private set; }
     public bool StatusIsError { get; private set; }
 
@@ -83,14 +156,14 @@ public sealed class RulesDatabaseService : IRulesDatabase
     {
         if (IsManageMode) return;
         IsManageMode = true;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     public void ExitManageMode()
     {
         if (!IsManageMode) return;
         IsManageMode = false;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     /// <summary>
@@ -130,13 +203,26 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
         try
         {
+            // Best-effort: bring legacy databases (built before the metadata
+            // tables existed) forward in place. Requires write access; if the
+            // file is read-only or locked we proceed without metadata — the DB
+            // still works for read-only querying.
+            try
+            {
+                RulesDbUpconverter.Upconvert(fullPath);
+            }
+            catch
+            {
+                // non-fatal: metadata features degrade, querying still works
+            }
+
             ReplaceDatabase(new RulesDatabase(fullPath), fullPath);
             SetStatus($"Loaded rules database: {Path.GetFileName(fullPath)}", isError: false);
             // A successful load exits manage mode automatically — wizard goes away.
             if (IsManageMode)
             {
                 IsManageMode = false;
-                Changed?.Invoke();
+                RaiseChanged();
             }
             return true;
         }
@@ -190,6 +276,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         string rulesXmlFileName,
         IEnumerable<UploadedRulesSourceFile> partFiles,
         string? partIndexUrl = null,
+        PartSourceConfig? partSource = null,
         CancellationToken cancellationToken = default)
     {
         var sourceDirectory = Path.Combine(_workingDirectory, "sources");
@@ -198,7 +285,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         var xmlPath = Path.Combine(sourceDirectory, MakeSafeFileName(rulesXmlFileName, "rules.xml"));
         await CopyToFileAsync(rulesXmlStream, xmlPath, cancellationToken);
 
-        await BuildFromXmlPathAsync(xmlPath, partFiles, partIndexUrl, cancellationToken);
+        await BuildFromXmlPathAsync(xmlPath, partFiles, partIndexUrl, partSource, cancellationToken);
     }
 
     /// <summary>
@@ -212,6 +299,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
         string updateExecutableFileName,
         IEnumerable<UploadedRulesSourceFile> partFiles,
         string? partIndexUrl = null,
+        PartSourceConfig? partSource = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(updateExecutableStream);
@@ -233,7 +321,7 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
             try
             {
-                await BuildFromXmlPathAsync(extractedXmlPath, partFiles, partIndexUrl, cancellationToken);
+                await BuildFromXmlPathAsync(extractedXmlPath, partFiles, partIndexUrl, partSource, cancellationToken);
             }
             finally
             {
@@ -250,11 +338,18 @@ public sealed class RulesDatabaseService : IRulesDatabase
         string xmlPath,
         IEnumerable<UploadedRulesSourceFile> partFiles,
         string? partIndexUrl,
+        PartSourceConfig? partSource,
         CancellationToken cancellationToken)
     {
         var sourceDirectory = Path.Combine(_workingDirectory, "sources");
         var partsDirectory = Path.Combine(sourceDirectory, "parts");
         var dbPath = Path.Combine(_workingDirectory, "rules.db");
+
+        // Release any currently-loaded database first: we are about to overwrite
+        // the working rules.db on disk, so it must not be held open (a lingering
+        // read connection + its stale -wal corrupts the rebuilt file).
+        Unload();
+
         Directory.CreateDirectory(sourceDirectory);
         if (Directory.Exists(partsDirectory))
             Directory.Delete(partsDirectory, recursive: true);
@@ -269,25 +364,49 @@ public sealed class RulesDatabaseService : IRulesDatabase
 
         try
         {
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
-                SetProgress(new DbBuildProgress("Importing rules elements"));
-                RulesDbBuilder.Import(xmlPath, dbPath, new Progress<int>(count =>
-                    SetProgress(new DbBuildProgress("Importing rules elements", Current: count))));
-
-                if (Directory.EnumerateFiles(partsDirectory).Any())
-                {
-                    SetProgress(new DbBuildProgress("Merging part files"));
-                    PartMerger.Merge(dbPath, partsDirectory, new Progress<string>(message =>
-                        SetProgress(new DbBuildProgress("Merging part files", Detail: message.Trim()))));
-                }
-
+                // Pull indexed parts (if any) into the same directory so they
+                // are archived and toggleable alongside uploaded parts.
                 if (!string.IsNullOrWhiteSpace(partIndexUrl))
                 {
                     SetProgress(new DbBuildProgress("Downloading indexed part files"));
-                    var mergeResult = PartMerger.MergeFromIndex(dbPath, partIndexUrl.Trim(), new Progress<string>(message =>
-                        SetProgress(new DbBuildProgress("Downloading indexed part files", Detail: message.Trim()))));
-                    SetProgress(new DbBuildProgress("Merged indexed part files", Detail: $"{mergeResult.FilesProcessed:N0} file(s)"));
+                    PartMerger.DownloadIndexParts(partIndexUrl.Trim(), partsDirectory,
+                        new Progress<string>(message =>
+                            SetProgress(new DbBuildProgress("Downloading indexed part files", Detail: message.Trim()))));
+                }
+
+                // Build through the layered store: imports the base snapshot,
+                // archives every part, writes the manifest, and materializes the
+                // working rules.db. This enables later enable/disable + rebuild.
+                var store = new RulesDbLayerStore(_workingDirectory);
+                // Categorize local/downloaded parts by any .index files present
+                // (DownloadIndexParts saves the index; an indexes/ subfolder is
+                // also honored) — falling back to the physical folder name.
+                var stagedParts = LocalPartStager.Stage(partsDirectory);
+
+                SetProgress(new DbBuildProgress("Importing rules elements"));
+                store.Initialize(xmlPath, stagedParts, dbPath,
+                    new Progress<string>(message =>
+                        SetProgress(new DbBuildProgress("Building rules database", Detail: message.Trim()))));
+
+                // Pull parts directly from a configured remote source (e.g. a
+                // GitHub repo) and layer them on top of the freshly built base.
+                if (partSource is { IsComplete: true })
+                {
+                    var source = PartSourceFactory.Create(partSource);
+                    SetProgress(new DbBuildProgress("Listing parts", Detail: source.DisplayName));
+                    var remoteParts = await source.ListAsync(cancellationToken);
+                    if (remoteParts.Count > 0)
+                    {
+                        await store.InstallRemotePartsAsync(source, remoteParts, cancellationToken,
+                            new Progress<string>(message =>
+                                SetProgress(new DbBuildProgress("Downloading parts", Detail: message.Trim()))));
+                        SetProgress(new DbBuildProgress("Building rules database", Detail: "merging remote parts"));
+                        store.Rebuild(dbPath,
+                            new Progress<string>(message =>
+                                SetProgress(new DbBuildProgress("Building rules database", Detail: message.Trim()))));
+                    }
                 }
             }, cancellationToken);
         }
@@ -330,29 +449,262 @@ public sealed class RulesDatabaseService : IRulesDatabase
     public IEnumerable<string> GetDistinctSources()
         => Current.GetDistinctSources();
 
-    public int Count => Current.Count;
+    public IReadOnlyList<PartLayer> GetPartLayers()
+        => Current.GetPartLayers();
 
-    public void Dispose()
+    public string? GetElementProvenanceCategory(string internalId)
+        => Current.GetElementProvenanceCategory(internalId);
+
+    /// <summary>
+    /// Build a provenance-based legality classifier for the loaded DB: elements
+    /// introduced/modified by a Homebrew part are HouseRule, by other overlay
+    /// parts (UnearthedArcana / sorted / 3rdParty) are PartFile, otherwise
+    /// RulesLegal. Returns null when no DB is loaded.
+    /// </summary>
+    public Func<RulesElement, LegalitySource?>? CreateProvenanceClassifier()
+    {
+        if (!IsLoaded) return null;
+        return element =>
+        {
+            var category = GetElementProvenanceCategory(element.InternalId);
+            if (category is null) return null; // base-only → fall back to heuristic
+            return string.Equals(category, RulePartCategories.Homebrew, StringComparison.OrdinalIgnoreCase)
+                ? LegalitySource.HouseRule
+                : LegalitySource.PartFile;
+        };
+    }
+
+    /// <summary>
+    /// Element count of the loaded database. Non-blocking and rebuild-safe: it
+    /// never waits on the rebuild gate or throws, so components that read it
+    /// during render (e.g. the status badge) can't deadlock the dispatcher or
+    /// tear down the circuit while an in-place rebuild is swapping the
+    /// connection. During that momentary window it returns the last known count.
+    /// </summary>
+    public int Count
+    {
+        get
+        {
+            lock (_sync)
+                return _current?.Count ?? _lastKnownCount;
+        }
+    }
+
+    /// <summary>
+    /// Fully release the currently-loaded database: dispose the read connection
+    /// (which, with pooling disabled, releases the OS file handle plus the
+    /// WAL/SHM sidecars) and reset all derived metadata. After this returns the
+    /// working <c>rules.db</c> file is no longer held open, so it is safe to
+    /// overwrite/rebuild. Safe to call when nothing is loaded.
+    ///
+    /// This is the single shared "close cleanly" path — reused by
+    /// <see cref="Dispose"/> and by every flow that rebuilds the working
+    /// database in place (initial build, part toggle, remote update) so none of
+    /// them overwrite a file we are still holding open.
+    /// </summary>
+    public void Unload()
     {
         RulesDatabase? old;
+        bool wasLoaded;
         lock (_sync)
         {
             old = _current;
+            wasLoaded = old is not null;
             _current = null;
             _databasePath = null;
             ContentHash = null;
             ContentHashComputing = false;
             SizeBytes = null;
             LoadedAt = null;
+            _vocabulary = null;
         }
 
+        // Stop the background hash AND wait for it to release its read handle,
+        // so a follow-up build/overwrite of rules.db can't race it.
+        CancelBackgroundHash();
+
         old?.Dispose();
+        // Belt-and-suspenders: drop any pooled handle that some other code path
+        // may have opened against the file, so the rebuild's delete/overwrite of
+        // rules.db (and its -wal/-shm) can't race a lingering connection.
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        if (wasLoaded)
+            RaiseChanged();
+    }
+
+    public void Dispose()
+    {
+        // Set the guard FIRST so the teardown Unload (and any in-flight
+        // background-hash completion) can't raise Changed and trigger a render
+        // on a circuit whose service provider is already being disposed.
+        _disposed = true;
+        Unload();
+        _notRebuilding.Dispose();
+        lock (_sync)
+        {
+            _hashCts?.Dispose();
+            _hashCts = null;
+        }
+    }
+
+    /// <summary>
+    /// Rebuild the working database without taking it offline. The new database
+    /// is materialized into a temp file by <paramref name="rebuildToTempPath"/>
+    /// while the current connection keeps serving reads (no UI lockup), then the
+    /// files are swapped and reopened in a brief gated window. <see cref="IsLoaded"/>
+    /// stays true throughout and progress is published via <see cref="CurrentProgress"/>.
+    /// Shared by every in-place part operation (toggle, category toggle, update).
+    /// </summary>
+    /// <param name="dbPath">The live working database path.</param>
+    /// <param name="rebuildToTempPath">
+    /// Materializes a fresh, self-contained database at the temp path it is given,
+    /// WITHOUT touching <paramref name="dbPath"/>. Receives a progress sink.
+    /// </param>
+    public async Task RebuildInPlaceAsync(string dbPath, Func<string, IProgress<string>, Task> rebuildToTempPath)
+    {
+        ArgumentNullException.ThrowIfNull(rebuildToTempPath);
+        var tempPath = dbPath + ".rebuild";
+
+        SetProgress(new DbBuildProgress("Rebuilding rules database"));
+        var progress = new Progress<string>(message =>
+            SetProgress(new DbBuildProgress("Rebuilding rules database", Detail: message.Trim())));
+
+        try
+        {
+            // Slow phase: build into a temp file. The live DB stays open and
+            // serving reads the whole time, so nothing blocks or bounces to the
+            // setup wizard. ConfigureAwait(false) is load-bearing: this method is
+            // awaited from a Blazor component event, so without it the activation
+            // steps below resume on the renderer's dispatcher thread. The gated
+            // swap window (_notRebuilding reset) synchronously triggers a
+            // re-render (via SetProgress -> Changed) that reads the DB; if that
+            // ran on the same dispatcher thread it would wait on _notRebuilding
+            // for a Set() that only this thread can make -> self-deadlock. Running
+            // activation off the dispatcher keeps any such reader wait short.
+            await rebuildToTempPath(tempPath, progress).ConfigureAwait(false);
+
+            // The activation phase used to run under a single "Activating
+            // rebuilt database" label, which hid where its several blocking
+            // sub-steps spent their time. Report each sub-step with a running
+            // elapsed count so a slow one is immediately visible in the UI.
+            var activateStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            void ActivationStep(string detail) =>
+                SetProgress(new DbBuildProgress(
+                    "Activating rebuilt database",
+                    Detail: $"{detail} (+{activateStopwatch.ElapsedMilliseconds} ms)"));
+
+            // Fold the new DB's WAL into a single self-contained file pre-swap.
+            ActivationStep("finalizing new database (WAL checkpoint)");
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            CheckpointWal(tempPath);
+
+            // Stop the (now-stale) background hash of the OUTGOING database and
+            // wait for it to release its read handle. This can cost up to a few
+            // seconds; do it BEFORE gating readers so its cooperative-cancel
+            // wait doesn't hold every concurrent DB query blocked on
+            // _notRebuilding.
+            ActivationStep("stopping background verification");
+            CancelBackgroundHash();
+
+            // Fast phase: gate readers only for the file swap + reopen.
+            ActivationStep("releasing current database");
+            RulesDatabase? old;
+            lock (_sync)
+            {
+                _notRebuilding.Reset();
+                old = _current;
+                _current = null;
+            }
+            old?.Dispose();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try
+            {
+                ActivationStep("swapping database file");
+                SwapDatabaseFile(dbPath, tempPath);
+                ActivationStep("reopening database");
+                if (!TryOpen(dbPath, out var error))
+                    throw new InvalidOperationException(error);
+            }
+            finally
+            {
+                _notRebuilding.Set();
+            }
+            ActivationStep("activation complete");
+        }
+        finally
+        {
+            ClearProgress();
+            TryDeleteRebuildArtifacts(tempPath);
+        }
+    }
+
+    /// <summary>Atomically replace <paramref name="targetPath"/> with the freshly built <paramref name="newPath"/>.</summary>
+    private static void SwapDatabaseFile(string targetPath, string newPath)
+    {
+        // Remove the target's stale sidecars (a leftover -wal would corrupt the
+        // new file when next opened).
+        TryDelete(targetPath + "-wal");
+        TryDelete(targetPath + "-shm");
+
+        // Replace the main file. Retry briefly: a background reader (e.g. the
+        // content hash) may not have released its handle the instant we asked it
+        // to cancel — cooperative cancellation has a short tail.
+        Exception? last = null;
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            try
+            {
+                File.Move(newPath, targetPath, overwrite: true);
+                last = null;
+                break;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A reader (content hash, a racing query, or a pooled handle)
+                // may still hold the file open. Windows surfaces this as either
+                // IOException or UnauthorizedAccessException; retry both.
+                last = ex;
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                Thread.Sleep(50);
+            }
+        }
+        if (last is not null)
+            throw last;
+
+        TryDelete(newPath + "-wal");
+        TryDelete(newPath + "-shm");
+    }
+
+    private static void TryDeleteRebuildArtifacts(string tempPath)
+    {
+        foreach (var suffix in new[] { "", "-wal", "-shm" })
+            TryDelete(tempPath + suffix);
+    }
+
+    /// <summary>Fold a database's WAL into its main file so a plain file move is complete.</summary>
+    private static void CheckpointWal(string dbPath)
+    {
+        try
+        {
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            cmd.ExecuteNonQuery();
+        }
+        catch { /* best-effort; the move still proceeds */ }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); }
     }
 
     private IRulesDatabase Current
     {
         get
         {
+            // If an in-place rebuild is swapping the connection, wait for it to
+            // finish rather than throwing — the DB is logically still loaded.
+            if (!_notRebuilding.IsSet)
+                _notRebuilding.Wait(TimeSpan.FromSeconds(30));
             lock (_sync)
                 return _current ?? throw new InvalidOperationException("Load a rules database before using the character builder.");
         }
@@ -382,24 +734,35 @@ public sealed class RulesDatabaseService : IRulesDatabase
         {
             old = _current;
             _current = database;
+            _lastKnownCount = database.Count;
             _databasePath = databasePath;
             ContentHash = null;
             ContentHashComputing = true;
             SizeBytes = size;
             LoadedAt = DateTime.UtcNow;
+            _vocabulary = null; // re-derive against the new database on next access
+
+            // Cancel any prior (now-stale) hash and start a fresh cancellable one.
+            _hashCts?.Cancel();
+            _hashCts?.Dispose();
+            _hashCts = new CancellationTokenSource();
         }
 
         old?.Dispose();
-        Changed?.Invoke();
+        RaiseChanged();
+
+        CancellationToken hashToken;
+        lock (_sync)
+            hashToken = _hashCts!.Token;
 
         // Compute the content hash off the UI thread — a ~50 MB DB takes a
         // couple of seconds to fingerprint. Fire-and-forget; the UI watches
         // ContentHashComputing + Changed to know when it lands.
-        _ = Task.Run(() =>
+        var hashTask = Task.Run(() =>
         {
             try
             {
-                var hash = RulesDbContentHasher.ComputeContentHash(databasePath);
+                var hash = RulesDbContentHasher.ComputeContentHash(databasePath, hashToken);
                 lock (_sync)
                 {
                     if (!ReferenceEquals(_current, database))
@@ -407,7 +770,11 @@ public sealed class RulesDatabaseService : IRulesDatabase
                     ContentHash = hash;
                     ContentHashComputing = false;
                 }
-                Changed?.Invoke();
+                RaiseChanged();
+            }
+            catch (OperationCanceledException)
+            {
+                // Superseded by a newer load/rebuild — the new load owns the hash.
             }
             catch
             {
@@ -417,16 +784,58 @@ public sealed class RulesDatabaseService : IRulesDatabase
                         return;
                     ContentHashComputing = false;
                 }
-                Changed?.Invoke();
+                RaiseChanged();
             }
-        });
+        }, hashToken);
+
+        lock (_sync)
+            _hashTask = hashTask;
+    }
+
+    /// <summary>
+    /// Cancel the in-flight background content-hash AND wait for it to actually
+    /// finish, so its (pooled) read connection is released before the working
+    /// DB file is replaced. Cancelling the token alone is not enough — the scan
+    /// loop only observes cancellation between rows, so the connection can still
+    /// be open for a beat, which makes the subsequent <c>File.Move</c> fail with
+    /// a sharing violation (IOException/UnauthorizedAccessException). Bounded so
+    /// a wedged hash can never stall the swap indefinitely.
+    /// </summary>
+    private void CancelBackgroundHash()
+    {
+        Task? task;
+        lock (_sync)
+        {
+            _hashCts?.Cancel();
+            task = _hashTask;
+        }
+
+        if (task is null)
+            return;
+
+        try
+        {
+            // The scan checks cancellation per row, so this returns quickly; the
+            // timeout is just a safety net against a pathological stall.
+            task.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException)
+        {
+            // Cancellation surfaces as OperationCanceledException here — expected.
+        }
+
+        lock (_sync)
+        {
+            if (ReferenceEquals(_hashTask, task))
+                _hashTask = null;
+        }
     }
 
     private void SetStatus(string message, bool isError)
     {
         StatusMessage = message;
         StatusIsError = isError;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     private void SetProgress(DbBuildProgress progress)
@@ -437,13 +846,13 @@ public sealed class RulesDatabaseService : IRulesDatabase
             ? progress.Phase
             : $"{progress.Phase}: {progress.Detail}";
         StatusIsError = false;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     private void ClearProgress()
     {
         CurrentProgress = null;
-        Changed?.Invoke();
+        RaiseChanged();
     }
 
     private static void TryDelete(string path)

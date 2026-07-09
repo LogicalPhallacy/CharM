@@ -1,0 +1,38 @@
+@* One entry in the PrintSheet "Character Choices" box: element name, its
+   source-book citation, and short description. Centralizes the DB fallback
+   resolution so Class Features / Racial Traits / Feats don't each repeat it.
+   The rules data carries no page numbers, so the citation is the book only. *@
+@inject CharacterSessionService SessionService
+
+<div class="build-entry">
+    <div class="be-head">
+        <span class="name">@Element.Name</span>
+        @if (!string.IsNullOrEmpty(Source))
+        {
+            <span class="src">@Source</span>
+        }
+    </div>
+    @{ var sd = ShortDescription; }
+    @if (!string.IsNullOrEmpty(sd))
+    {
+        <span class="desc">@sd</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public CharM.Engine.Rules.RulesElement Element { get; set; } = default!;
+
+    // Resolve from the database so in-tree wrappers that don't carry the field
+    // on the element itself still surface their description / source.
+    private CharM.Engine.Rules.RulesElement Detail
+        => (Element.InternalId is { Length: > 0 } id ? SessionService.GetElementDetails(id) : null) ?? Element;
+
+    private string? ShortDescription
+        => Detail.Fields.TryGetValue("Short Description", out var sd) && !string.IsNullOrWhiteSpace(sd) ? sd : null;
+
+    private string? Source
+        => !string.IsNullOrWhiteSpace(Element.Source)
+            ? Element.Source
+            : (string.IsNullOrWhiteSpace(Detail.Source) ? null : Detail.Source);
+}

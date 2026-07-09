@@ -42,8 +42,10 @@ public static class SummaryTextImporter
 
         var unconsumed = SummaryTextDriver.Replay(session, database, ocbText);
 
-        // TODO: actually consume `ext` once Extensions block is implemented.
-        _ = ext;
+        // Restore recorded part provenance from the CharM extensions block so
+        // the character can be audited against the current rules database.
+        foreach (var part in Extensions.CharMExtensionsBlock.ParseProvenance(ext))
+            session.BuildProvenance.Add(part);
 
         return new ImportResult(session, unconsumed, Array.Empty<string>());
     }

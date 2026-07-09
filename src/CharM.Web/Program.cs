@@ -19,21 +19,20 @@ builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions>(options =>
     options.MaximumReceiveMessageSize = 4L * 1024L * 1024L;
 });
 
-builder.Services.AddSingleton<RulesDatabaseService>();
-builder.Services.AddSingleton<CharM.RulesDb.Storage.IRulesDatabase>(sp =>
-    sp.GetRequiredService<RulesDatabaseService>());
+// Blazor Server keeps a WebSocket open per connected browser tab. On Ctrl-C,
+// Kestrel's graceful shutdown waits for active connections to drain, but an
+// idle-but-open circuit WebSocket does not close until the browser itself
+// disconnects — so with a tab still open the host otherwise sits for the full
+// default 30s HostOptions.ShutdownTimeout before exiting (closing the tab makes
+// shutdown immediate). Shorten the timeout so Ctrl-C returns promptly; there is
+// no critical server-side state to flush on exit (the rules DB and character
+// files are written synchronously as operations happen).
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.ShutdownTimeout = TimeSpan.FromSeconds(3);
+});
 
-// Character session — scoped per connection (one session per user tab)
-builder.Services.AddScoped<CharacterSessionService>();
-builder.Services.AddScoped<RetrainingService>();
-builder.Services.AddScoped<BrowserStorageService>();
-builder.Services.AddScoped<CharacterRestoreState>();
-builder.Services.AddScoped<PrintCardCollector>();
-builder.Services.AddScoped<DiceRoller>();
-builder.Services.AddScoped<DiceRollerUiService>();
-builder.Services.AddScoped<CharacterResourceTracker>();
-builder.Services.AddScoped<CalculationBreakdownService>();
-builder.Services.AddScoped<DisplaySettingsService>();
+builder.Services.AddCharmCoreServices();
 
 var app = builder.Build();
 

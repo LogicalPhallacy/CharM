@@ -278,10 +278,8 @@ public sealed partial class CharacterCreationWizard
         }
 
         // Priority 2: Find earliest pending choice by type_order
-        var pending = GetPendingChoicesFromTree();
-        var earliest = pending
-            .OrderBy(p => GetTypeSortOrder(p.Slot.ElementType))
-            .FirstOrDefault();
+        var earliest = GetPendingChoicesFromTree()
+            .MinBy(p => GetTypeSortOrder(p.Slot.ElementType));
 
         if (earliest is not null)
         {
@@ -296,8 +294,7 @@ public sealed partial class CharacterCreationWizard
     /// <summary>Check if all mandatory choices are made (excluding skipped slots).</summary>
     public bool IsComplete =>
         _scoresSet && !_tree.GetPendingChoices()
-            .Where(s => !_skippedSlots.Contains(s))
-            .Any(s => IsStepAvailable(MapTypeToStep(s.ElementType)));
+            .Any(s => !_skippedSlots.Contains(s) && IsStepAvailable(MapTypeToStep(s.ElementType)));
 
     /// <summary>Get the computed character after all choices are made.</summary>
     public CharacterBuildResult Build(

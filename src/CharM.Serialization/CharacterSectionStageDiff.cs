@@ -399,7 +399,7 @@ public static partial class CharacterSectionStageDiff
     private static string NormalizeWhitespace(string? text)
         => string.IsNullOrWhiteSpace(text)
             ? string.Empty
-            : System.Text.RegularExpressions.Regex.Replace(text.Trim(), @"\s+", " ");
+            : WhitespaceRegex().Replace(text.Trim(), " ");
 
     private static void AddRulesElementChild(
         List<SectionStageChild> children,

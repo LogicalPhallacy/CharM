@@ -1,6 +1,6 @@
-using System.Text.RegularExpressions;
 using System.Xml;
 using CharM.Engine.Rules;
+using static CharM.RulesDb.Import.RulesXmlImportHelpers;
 
 namespace CharM.RulesDb.Import;
 
@@ -57,16 +57,11 @@ public static partial class RulesXmlReader
         if (name is null || type is null || internalId is null)
             return null;
 
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var fieldEntries = new List<KeyValuePair<string, string>>();
-        string? prereqs = null;
-        var categories = new List<string>();
-        var rules = new List<RuleDirective>();
+        var asm = new RulesElementAssembler();
 
         if (!reader.IsEmptyElement)
         {
             int depth = reader.Depth;
-            var description = new System.Text.StringBuilder();
             while (reader.Read())
             {
                 if (reader.NodeType == XmlNodeType.EndElement && reader.Depth == depth)
@@ -79,112 +74,32 @@ public static partial class RulesXmlReader
                      || reader.NodeType == XmlNodeType.SignificantWhitespace)
                     && reader.Depth == depth + 1)
                 {
-                    description.Append(reader.Value);
+                    asm.AppendDescriptionText(reader.Value);
                     continue;
                 }
 
                 if (reader.NodeType != XmlNodeType.Element)
                     continue;
 
-                switch (reader.LocalName)
-                {
-                    case "specific":
-                        ReadSpecific(reader, fields, fieldEntries);
-                        break;
-
-                    case "Prereqs":
-                    case "prereqs":
-                        prereqs = reader.ReadElementContentAsString()?.Trim();
-                        break;
-
-                    case "Category":
-                        ReadCategories(reader, categories);
-                        break;
-
-                    case "rules":
-                        ReadRulesBlock(reader, rules);
-                        break;
-
-                    case "print-prereqs":
-                        var printPrereqs = reader.ReadElementContentAsString()?.Trim();
-                        if (!string.IsNullOrEmpty(printPrereqs)
-                            && !fields.ContainsKey("print-prereqs"))
-                        {
-                            fields["print-prereqs"] = printPrereqs;
-                            fieldEntries.Add(new("print-prereqs", printPrereqs));
-                        }
-                        break;
-
-                    case "Flavor":
-                    case "flavor":
-                        var flavor = reader.ReadElementContentAsString()?.Trim();
-                        if (!string.IsNullOrEmpty(flavor)
-                            && !fields.ContainsKey("Flavor"))
-                        {
-                            fields["Flavor"] = flavor;
-                            fieldEntries.Add(new("Flavor", flavor));
-                        }
-                        break;
-                }
-            }
-
-            string descText = NormalizeDescription(description.ToString());
-            if (descText.Length > 0 && !fields.ContainsKey("Description"))
-            {
-                fields["Description"] = descText;
-                fieldEntries.Add(new("Description", descText));
+                asm.HandleChild(new XmlReaderChildNode(reader));
             }
         }
 
-        var element = new RulesElement
-        {
-            InternalId = internalId,
-            Name = name,
-            Type = type,
-            Source = source,
-            Prereqs = prereqs,
-            Fields = fields,
-            FieldEntries = fieldEntries,
-            Rules = rules,
-        };
-
-        return new ParsedElement(element, categories);
+        return asm.Build(internalId, name, type, source);
     }
 
-    private static void ReadSpecific(
-        XmlReader reader,
-        Dictionary<string, string> fields,
-        List<KeyValuePair<string, string>> fieldEntries)
+    /// <summary>
+    /// <see cref="IRuleChildNode"/> adapter over the streaming reader positioned
+    /// on a child element start tag. <see cref="GetTextContent"/> and
+    /// <see cref="ParseRulesBlockInto"/> consume the element (advance the cursor),
+    /// matching the inline calls they replaced.
+    /// </summary>
+    private readonly struct XmlReaderChildNode(XmlReader reader) : IRuleChildNode
     {
-        string? fieldName = reader.GetAttribute("name");
-        if (fieldName is null) return;
-
-        // NOTE: do NOT trim leading whitespace on the field name. Augmentable
-        // powers intentionally use `<specific name=" Hit">` (leading space) to
-        // distinguish each Augment-N variant's Hit/Effect/Target lines from the
-        // base power's. Collapsing them would let the last augment overwrite
-        // the base. Match OCB's behavior and treat each variant as a distinct key.
-
-        string content = reader.ReadElementContentAsString()?.Trim() ?? "";
-
-        // Always record the raw entry so callers that need duplicates (e.g.
-        // primary vs secondary attack panes — Ravening Thought emits two
-        // <specific name="Hit"> children, one for the primary attack at 2d6
-        // and one for the secondary at 1d6) can recover both. The lookup
-        // Dictionary holds the FIRST occurrence to match OCB's
-        // RulesElementField behavior for single-named queries.
-        fieldEntries.Add(new(fieldName, content));
-        if (!fields.ContainsKey(fieldName))
-            fields[fieldName] = content;
-    }
-
-    private static void ReadCategories(XmlReader reader, List<string> categories)
-    {
-        string content = reader.ReadElementContentAsString()?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(content)) return;
-
-        foreach (var cat in content.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            categories.Add(cat);
+        public string LocalName => reader.LocalName;
+        public string? Attr(string name) => reader.GetAttribute(name);
+        public string GetTextContent() => reader.ReadElementContentAsString()?.Trim() ?? "";
+        public void ParseRulesBlockInto(List<RuleDirective> rules) => ReadRulesBlock(reader, rules);
     }
 
     private static void ReadRulesBlock(XmlReader reader, List<RuleDirective> rules)
@@ -200,84 +115,24 @@ public static partial class RulesXmlReader
             if (reader.NodeType != XmlNodeType.Element)
                 continue;
 
+            var node = new XmlReaderRuleNode(reader);
             RuleDirective? directive = reader.LocalName switch
             {
-                "statadd" => ParseStatAdd(reader),
-                "grant" => ParseGrant(reader),
-                "modify" => ParseModify(reader),
+                "statadd" => RuleDirectiveParser.ParseStatAdd(node),
+                "grant" => RuleDirectiveParser.ParseGrant(node),
+                "modify" => RuleDirectiveParser.ParseModify(node),
                 "select" => ParseSelect(reader),
-                "replace" => ParseReplace(reader),
-                "drop" => ParseDrop(reader),
-                "suggest" => ParseSuggest(reader),
-                "textstring" => ParseTextString(reader),
-                "statalias" => ParseStatAlias(reader),
+                "replace" => RuleDirectiveParser.ParseReplace(node),
+                "drop" => RuleDirectiveParser.ParseDrop(node),
+                "suggest" => RuleDirectiveParser.ParseSuggest(node),
+                "textstring" => RuleDirectiveParser.ParseTextString(node),
+                "statalias" => RuleDirectiveParser.ParseStatAlias(node),
                 _ => null,
             };
 
             if (directive is not null)
                 rules.Add(directive);
         }
-    }
-
-    private static StatAddDirective? ParseStatAdd(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? valueStr = reader.GetAttribute("value");
-
-        if (name is null || valueStr is null) return null;
-
-        return new StatAddDirective
-        {
-            Name = name,
-            Value = ValueExpression.Parse(valueStr),
-            BonusType = reader.GetAttribute("type"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-            Condition = reader.GetAttribute("condition"),
-            Wearing = reader.GetAttribute("wearing"),
-            NotWearing = reader.GetAttribute("not-wearing"),
-            Zero = ParseBool(reader.GetAttribute("zero")),
-            NonZero = ParseBool(reader.GetAttribute("non-zero")),
-            HalfPoint = ParseBool(reader.GetAttribute("half-point")),
-            StatMin = reader.GetAttribute("statmin"),
-        };
-    }
-
-    private static GrantDirective? ParseGrant(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? type = reader.GetAttribute("type");
-
-        if (name is null || type is null) return null;
-
-        return new GrantDirective
-        {
-            Name = name,
-            ElementType = type,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static ModifyDirective? ParseModify(XmlReader reader)
-    {
-        // Field attribute is case-insensitive: both "Field" and "field" are used
-        string? field = reader.GetAttribute("Field") ?? reader.GetAttribute("field");
-        if (field is null) return null;
-
-        return new ModifyDirective
-        {
-            Field = field,
-            Name = reader.GetAttribute("name"),
-            ElementType = reader.GetAttribute("type"),
-            Value = reader.GetAttribute("value"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-            ListAddition = reader.GetAttribute("list-addition"),
-            SelectSlot = reader.GetAttribute("select"),
-            Wearing = reader.GetAttribute("wearing"),
-            DieIncrease = ParseIntOrNull(reader.GetAttribute("die-increase")),
-        };
     }
 
     private static SelectDirective? ParseSelect(XmlReader reader)
@@ -350,81 +205,6 @@ public static partial class RulesXmlReader
         };
     }
 
-    private static ReplaceDirective ParseReplace(XmlReader reader)
-    {
-        return new ReplaceDirective
-        {
-            Name = reader.GetAttribute("name"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Multiclass = reader.GetAttribute("multiclass"),
-            PowerSwap = reader.GetAttribute("powerswap"),
-            PowerReplace = reader.GetAttribute("power-replace"),
-            Optional = ParseBool(reader.GetAttribute("optional")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static DropDirective ParseDrop(XmlReader reader)
-    {
-        return new DropDirective
-        {
-            SelectSlot = reader.GetAttribute("select"),
-            Name = reader.GetAttribute("name"),
-            ElementType = reader.GetAttribute("type"),
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static SuggestDirective?ParseSuggest(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? type = reader.GetAttribute("type");
-
-        if (name is null || type is null) return null;
-
-        return new SuggestDirective
-        {
-            Name = name,
-            ElementType = type,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
-    private static TextStringDirective?ParseTextString(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? value = reader.GetAttribute("value");
-
-        if (name is null || value is null) return null;
-
-        return new TextStringDirective
-        {
-            Name = name,
-            Value = value,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-            Condition = reader.GetAttribute("condition"),
-        };
-    }
-
-    private static StatAliasDirective?ParseStatAlias(XmlReader reader)
-    {
-        string? name = reader.GetAttribute("name");
-        string? alias = reader.GetAttribute("alias");
-
-        if (name is null || alias is null) return null;
-
-        return new StatAliasDirective
-        {
-            Name = name,
-            Alias = alias,
-            Level = ParseIntOrNull(GetAttrCI(reader, "Level", "level")),
-            Requires = reader.GetAttribute("requires"),
-        };
-    }
-
     /// <summary>
     /// Case-insensitive attribute lookup. The XML uses mixed casing for attributes
     /// (e.g., "Level"/"level", "Category"/"category"). XmlReader.GetAttribute() is
@@ -432,29 +212,4 @@ public static partial class RulesXmlReader
     /// </summary>
     private static string? GetAttrCI(XmlReader reader, string upper, string lower) =>
         reader.GetAttribute(upper) ?? reader.GetAttribute(lower);
-
-    private static bool ParseBool(string? value) =>
-        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-
-    private static int? ParseIntOrNull(string? value) =>
-        int.TryParse(value, out int result) ? result : null;
-
-    /// <summary>
-    /// Collapse whitespace runs (including the leading tab/newline indentation present
-    /// in CB XML) and split paragraph-like breaks into single newlines so rendering
-    /// stays predictable.
-    /// </summary>
-    private static string NormalizeDescription(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
-        // Convert tabs to spaces, then split on any newline-run, trim each line, drop blanks, join with \n.
-        var lines = raw.Replace('\t', ' ')
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(l => WhitespaceRegex().Replace(l, " ").Trim())
-            .Where(l => l.Length > 0);
-        return string.Join("\n", lines);
-    }
-
-    [GeneratedRegex(@"\s+")]
-    private static partial Regex WhitespaceRegex();
 }

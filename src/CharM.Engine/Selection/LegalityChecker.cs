@@ -27,6 +27,16 @@ public enum LegalitySource
 public sealed class LegalityChecker
 {
     /// <summary>
+    /// Optional provenance-based source classifier keyed by element internal-id.
+    /// When set (by a layer with rules-DB access), it takes precedence over the
+    /// source-string heuristic so PartFile / HouseRule classification can be
+    /// derived from <c>part_provenance</c> / <c>part_registry</c> rather than a
+    /// fragile substring match on the sourcebook name. Returning null falls back
+    /// to the heuristic.
+    /// </summary>
+    public Func<RulesElement, LegalitySource?>? ProvenanceClassifier { get; set; }
+
+    /// <summary>
     /// Check if a single element is legal for the current character state.
     /// </summary>
     public LegalityResult CheckElement(
@@ -107,11 +117,18 @@ public sealed class LegalityChecker
         };
     }
 
-    private static LegalitySource DetermineSource(RulesElement element)
+    private LegalitySource DetermineSource(RulesElement element)
     {
+        // Prefer provenance-based classification when a classifier is wired in.
+        if (ProvenanceClassifier?.Invoke(element) is { } classified)
+            return classified;
+
         if (element.Source is null)
             return LegalitySource.HouseRule;
 
+        // Legacy/houserule heuristic: some hand-authored parts store a ".part"
+        // filename in the source field. Provenance classification (above) is the
+        // authoritative path; this remains as a fallback.
         if (element.Source.Contains(".part", StringComparison.OrdinalIgnoreCase))
             return LegalitySource.PartFile;
 

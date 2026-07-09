@@ -1,6 +1,6 @@
 @using CharM.Web.Services
+@inherits CharmComponentBase
 @inject RulesDatabaseService RulesDatabase
-@implements IDisposable
 @rendermode @(AppInteractiveServer)
 
 @if (!RulesDatabase.IsLoaded || RulesDatabase.IsManageMode)
@@ -28,10 +28,9 @@ else
 
     private void HandleCancelManage() => RulesDatabase.ExitManageMode();
 
-    private void HandleRulesDatabaseChanged()
-        => _ = InvokeAsync(StateHasChanged);
+    private void HandleRulesDatabaseChanged() => NotifyStateChanged();
 
-    public void Dispose()
+    protected override void OnDispose()
     {
         RulesDatabase.Changed -= HandleRulesDatabaseChanged;
     }

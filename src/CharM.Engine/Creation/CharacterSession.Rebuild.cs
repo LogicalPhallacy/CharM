@@ -11,10 +11,12 @@ public sealed partial class CharacterSession
 
     private CharacterCreationWizard CreateWizard()
     {
-        return new CharacterCreationWizard(
+        var wizard = new CharacterCreationWizard(
             _findById, _findByNameAndType, _findByType,
             _findByTypeAndSource, Level,
             autoFillSelectDefaults: _autoFillSelectDefaults);
+        wizard.SetEnabledSources(_enabledSources);
+        return wizard;
     }
 
     /// <summary>

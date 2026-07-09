@@ -63,6 +63,13 @@ public sealed class CandidateFilter
     /// <param name="prereqCheck">Optional callback to evaluate element prerequisites against character state.</param>
     /// <param name="hasElement">Optional callback to check if character has a named element (for Existing filter).</param>
     /// <param name="characterLevel">Current character level for requires evaluation.</param>
+    /// <param name="sourceAllowed">
+    /// Optional predicate over an element's <c>Source</c> deciding whether it is
+    /// allowed by the currently enabled sourcebook set. When null, all sources
+    /// are allowed. This is the multi-sourcebook enable/disable filter (distinct
+    /// from <paramref name="sourceFilter"/>, which narrows the DB query to a
+    /// single source).
+    /// </param>
     public IReadOnlyList<RulesElement> FindCandidates(
         SelectDirective select,
         Dictionary<string, string>? variables = null,
@@ -70,7 +77,8 @@ public sealed class CandidateFilter
         Func<RulesElement, bool>? prereqCheck = null,
         Func<string, bool>? hasElement = null,
         int characterLevel = 1,
-        Func<string, string?>? resolveNameToId = null)
+        Func<string, string?>? resolveNameToId = null,
+        Func<string?, bool>? sourceAllowed = null)
     {
         // 1. Query by ElementType (with optional source filter)
         bool needsRules = prereqCheck is not null;
@@ -104,6 +112,10 @@ public sealed class CandidateFilter
 
             // 2. Category expression filter
             if (!CategoryMatcher.Matches(select.Category, candidate, variables, elementLevel, resolveNameToId))
+                continue;
+
+            // 2b. Enabled-sourcebook filter (multi-source enable/disable).
+            if (sourceAllowed is not null && !sourceAllowed(candidate.Source))
                 continue;
 
             // 3. Existing filter: only elements already on the character

@@ -53,7 +53,7 @@ internal sealed class RaceClassBlock : SummaryBlock
         // The line is N comma-separated tokens; each must resolve as a Race,
         // Class, Paragon Path, Epic Destiny, or Hybrid pair ("A|B"). If
         // anything fails to resolve, we don't claim the line.
-        var tokens = line.Split(',').Select(t => t.Trim()).ToList();
+        var tokens = SplitCommaTokens(line);
         var resolved = new List<(RulesElement Element, string? HybridA, string? HybridB)>();
 
         foreach (var token in tokens)

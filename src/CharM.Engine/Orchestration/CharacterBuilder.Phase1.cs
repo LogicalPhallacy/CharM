@@ -250,23 +250,5 @@ public sealed partial class CharacterBuilder
     /// Keeps retrying until no more progress is made (fixed-point iteration).
     /// </summary>
     private void ProcessDeferredGrants(int characterLevel)
-    {
-        bool progress = true;
-        int maxIterations = _deferredGrants.Count + 1;
-        while (progress && _deferredGrants.Count > 0 && maxIterations-- > 0)
-        {
-            progress = false;
-            for (int i = _deferredGrants.Count - 1; i >= 0; i--)
-            {
-                var (grant, parent, deferredLevel) = _deferredGrants[i];
-                var child = ElementTree.ProcessGrant(grant, parent, deferredLevel);
-                if (child?.RulesElement is { } grantedElement)
-                {
-                    _deferredGrants.RemoveAt(i);
-                    ExecutePhase1(grantedElement, child, deferredLevel);
-                    progress = true;
-                }
-            }
-        }
-    }
+        => Phase1Cascade.ProcessDeferredGrants(ElementTree, _deferredGrants, ExecutePhase1);
 }

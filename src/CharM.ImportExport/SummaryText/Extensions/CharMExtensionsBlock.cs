@@ -35,8 +35,44 @@ internal static class CharMExtensionsBlock
             lines.Add($"TextString[{k}]: {v}");
         }
 
+        // Build provenance: record the enabled part layers (id + version) so the
+        // character can be audited against whatever rules DB it is opened under.
+        // Only emitted when the session actually carries provenance (CharM-built
+        // or round-tripped), so importing a plain OCB summary and re-exporting
+        // adds nothing.
+        foreach (var part in session.BuildProvenance)
+            lines.Add($"{PartLinePrefix}{part.PartId}|{part.Version}|{part.Category}");
+
         if (lines.Count == 0) return string.Empty;
         return Header + string.Join(SummaryBlock.Newline, lines) + SummaryBlock.Newline;
+    }
+
+    private const string PartLinePrefix = "Part: ";
+
+    /// <summary>
+    /// Parse the recorded part-provenance lines out of an extensions body into
+    /// <see cref="RecordedPart"/> entries. Other extension lines are ignored.
+    /// </summary>
+    public static IReadOnlyList<RecordedPart> ParseProvenance(string? extensionsBody)
+    {
+        if (string.IsNullOrEmpty(extensionsBody)) return [];
+
+        var parts = new List<RecordedPart>();
+        foreach (var raw in extensionsBody.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (!line.StartsWith(PartLinePrefix, StringComparison.Ordinal)) continue;
+
+            var payload = line[PartLinePrefix.Length..];
+            var cols = payload.Split('|');
+            if (cols.Length < 1 || string.IsNullOrWhiteSpace(cols[0])) continue;
+
+            parts.Add(new RecordedPart(
+                cols[0],
+                cols.Length > 1 && cols[1].Length > 0 ? cols[1] : null,
+                cols.Length > 2 && cols[2].Length > 0 ? cols[2] : null));
+        }
+        return parts;
     }
 
     /// <summary>

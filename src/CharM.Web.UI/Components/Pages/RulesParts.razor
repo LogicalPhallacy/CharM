@@ -1,0 +1,454 @@
+@page "/rules-parts"
+@using CharM.RulesDb.Import
+@using CharM.Web.Services
+@inherits CharmComponentBase
+@inject PartManagementService Parts
+@inject PartPreferencesStore Preferences
+@inject RulesDatabaseService RulesDatabase
+@inject CharacterSessionService SessionService
+
+<PageTitle>Rules Parts - CharM</PageTitle>
+
+<main class="p-6 lg:p-10 max-w-screen-xl mx-auto w-full">
+    <div class="flex items-center gap-3 mb-6">
+        <span class="material-symbols-outlined text-primary text-4xl">extension</span>
+        <div>
+            <h1 class="font-headline text-3xl font-bold text-on-surface">Rules parts &amp; overlays</h1>
+            <p class="text-sm text-on-surface-variant">Enable or disable part-file overlays, and check the configured source for updates.</p>
+        </div>
+    </div>
+
+    @if (!Parts.IsLayered)
+    {
+        <div class="p-4 bg-surface-container-low rounded ghost-border text-sm text-on-surface-variant">
+            This database wasn't built through the layered pipeline, so individual parts can't be toggled.
+            Rebuild it from the rules XML + part files (Manage rules database) to enable part management.
+        </div>
+    }
+    else
+    {
+        <!-- ============ Remote source / updates ============ -->
+        <section class="mb-8 p-5 bg-surface-container-low rounded ghost-border">
+            <h2 class="font-headline text-xl font-bold text-on-surface mb-3">Update source</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                <label class="text-sm text-on-surface flex flex-col gap-1">
+                    <span class="text-xs uppercase tracking-wider text-on-surface-variant">Provider</span>
+                    <select @bind="_kind" class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline">
+                        <option value="@PartSourceKind.GitHub">GitHub</option>
+                        <option value="@PartSourceKind.CbloaderHost">CBLoader host</option>
+                        <option value="@PartSourceKind.WebPageIndex">Index page URL</option>
+                    </select>
+                </label>
+                @if (_kind == PartSourceKind.GitHub)
+                {
+                    <label class="text-sm text-on-surface flex flex-col gap-1 md:col-span-2">
+                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">owner/repo</span>
+                        <input @bind="_ownerRepo" placeholder="owner/repo"
+                               class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
+                    </label>
+                    <label class="text-sm text-on-surface flex flex-col gap-1">
+                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">ref</span>
+                        <input @bind="_ref" placeholder="master"
+                               class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
+                    </label>
+                }
+                else
+                {
+                    <label class="text-sm text-on-surface flex flex-col gap-1 md:col-span-3">
+                        <span class="text-xs uppercase tracking-wider text-on-surface-variant">@(_kind == PartSourceKind.WebPageIndex ? "Index page URL" : "Host base URL")</span>
+                        <input @bind="_hostUrl" placeholder="https://cbloader.vorpald20.com/"
+                               class="px-2 py-2 bg-surface-container-lowest rounded border-b border-outline" />
+                    </label>
+                }
+            </div>
+            <div class="flex gap-3 mt-4">
+                <button @onclick="CheckUpdatesAsync" disabled="@_busy"
+                        class="px-4 py-2 bg-primary text-on-primary font-label font-semibold rounded hover:bg-primary-dim disabled:opacity-40">
+                    Check for updates
+                </button>
+                @if (_report is not null && _report.HasUpdates)
+                {
+                    <button @onclick="ApplyUpdatesAsync" disabled="@_busy"
+                            class="px-4 py-2 bg-secondary text-on-secondary font-label font-semibold rounded hover:opacity-90 disabled:opacity-40">
+                        Download &amp; apply (@(_report.New.Count() + _report.Updated.Count()))
+                    </button>
+                }
+            </div>
+
+            @if (_report is not null)
+            {
+                <p class="text-sm text-on-surface-variant mt-3">
+                    @_report.New.Count() new, @_report.Updated.Count() updated,
+                    @_report.MissingRemotely.Count() missing remotely.
+                </p>
+
+                @if (_report.Updated.Any() || _report.New.Any() || _report.MissingRemotely.Any())
+                {
+                    <div class="mt-2 max-h-60 overflow-y-auto pr-2 space-y-3 text-sm">
+                        @if (_report.Updated.Any())
+                        {
+                            <div>
+                                <h4 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">Updated (@_report.Updated.Count())</h4>
+                                <ul class="space-y-0.5">
+                                    @foreach (var e in _report.Updated)
+                                    {
+                                        <li class="flex items-baseline justify-between gap-3">
+                                            <span class="text-on-surface truncate">@e.PartId</span>
+                                            <span class="text-xs text-on-surface-variant shrink-0 font-mono">@FormatVersion(e.InstalledVersion) → @FormatVersion(e.RemoteVersion)</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                        @if (_report.New.Any())
+                        {
+                            <div>
+                                <h4 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">New (@_report.New.Count())</h4>
+                                <ul class="space-y-0.5">
+                                    @foreach (var e in _report.New)
+                                    {
+                                        <li class="flex items-baseline justify-between gap-3">
+                                            <span class="text-on-surface truncate">@e.PartId</span>
+                                            <span class="text-xs text-on-surface-variant shrink-0 font-mono">@FormatVersion(e.RemoteVersion)</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                        @if (_report.MissingRemotely.Any())
+                        {
+                            <div>
+                                <h4 class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant mb-1">Missing remotely (@_report.MissingRemotely.Count())</h4>
+                                <ul class="space-y-0.5">
+                                    @foreach (var e in _report.MissingRemotely)
+                                    {
+                                        <li class="flex items-baseline justify-between gap-3">
+                                            <span class="text-on-surface truncate">@e.PartId</span>
+                                            <span class="text-xs text-on-surface-variant shrink-0 font-mono">@FormatVersion(e.InstalledVersion)</span>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        </section>
+
+        <!-- ============ Installed part layers ============ -->
+        <section class="p-5 bg-surface-container-low rounded ghost-border">
+            <div class="flex items-start justify-between gap-4 mb-1">
+                <div>
+                    <h2 class="font-headline text-xl font-bold text-on-surface">Installed parts</h2>
+                    <p class="text-xs text-on-surface-variant mt-1">
+                        Check/uncheck parts (or whole folders), then Apply to rebuild the database once.
+                    </p>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    @if (_pending.Count > 0)
+                    {
+                        <button @onclick="DiscardPendingChanges" disabled="@_busy"
+                                class="px-3 py-1.5 text-sm font-label font-semibold text-on-surface bg-surface-container-low rounded hover:bg-surface-container-high transition-colors disabled:opacity-40">
+                            Discard
+                        </button>
+                    }
+                    <button @onclick="ApplyPendingChangesAsync" disabled="@(_busy || _pending.Count == 0)"
+                            class="px-4 py-1.5 text-sm font-label font-semibold text-on-primary bg-primary rounded hover:bg-primary-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                        Apply changes@(_pending.Count > 0 ? $" ({_pending.Count})" : "")
+                    </button>
+                </div>
+            </div>
+            <div class="max-h-96 overflow-y-auto pr-2">
+                @foreach (var group in GetLayers()
+                    .GroupBy(p => p.Category ?? "uncategorized")
+                    .OrderByDescending(g => g.Any(p => p.IsOfficial))
+                    .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    var parts = group.ToList();
+                    var isOfficial = parts.Any(p => p.IsOfficial);
+                    var enabledCount = parts.Count(EffectiveEnabled);
+                    var allEnabled = enabledCount == parts.Count;
+                    <div class="mt-4 first:mt-0">
+                        <label class="flex items-center gap-2 cursor-pointer mb-1 pb-1 border-b border-outline/40">
+                            <input type="checkbox" checked="@allEnabled" disabled="@_busy"
+                                   @onchange="@(e => ToggleCategory(parts, (bool)e.Value!))" />
+                            <span class="text-xs font-label font-semibold uppercase tracking-wider text-on-surface-variant">@group.Key</span>
+                            @if (isOfficial)
+                            {
+                                <span class="text-[10px] font-label font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary-container text-on-primary-container">Official</span>
+                            }
+                            <span class="text-xs text-on-surface-variant">(@enabledCount/@parts.Count)</span>
+                        </label>
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8">
+                            @foreach (var part in parts)
+                            {
+                                var isPending = _pending.ContainsKey(part.PartId);
+                                <label class="flex items-center justify-between gap-2 py-1.5 border-b border-outline/20 cursor-pointer">
+                                    <span class="flex items-baseline gap-2 min-w-0">
+                                        @if (isPending)
+                                        {
+                                            <span class="text-tertiary shrink-0" title="Pending change">●</span>
+                                        }
+                                        <span class="text-sm @(isPending ? "text-on-surface font-semibold" : "text-on-surface") truncate">@part.Filename</span>
+                                        @if (!string.IsNullOrWhiteSpace(part.Version))
+                                        {
+                                            <span class="text-xs text-on-surface-variant shrink-0">v@(part.Version)</span>
+                                        }
+                                    </span>
+                                    <input type="checkbox" class="shrink-0" checked="@EffectiveEnabled(part)" disabled="@_busy"
+                                           @onchange="@(e => TogglePart(part, (bool)e.Value!))" />
+                                </label>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </section>
+    }
+
+    @if (_message is not null)
+    {
+        <div class="mt-6 p-3 rounded text-sm font-label @(_isError ? "bg-error-container text-on-error-container" : "bg-success-container text-on-success-container")">
+            @_message
+        </div>
+    }
+    @if (_busy)
+    {
+        var progress = RulesDatabase.CurrentProgress;
+        <div class="mt-3 p-4 bg-surface-container-low rounded">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="material-symbols-outlined text-primary animate-spin text-lg">progress_activity</span>
+                <span class="text-sm font-label font-semibold text-on-surface">@(progress?.Phase ?? "Rebuilding the rules database")</span>
+            </div>
+            <div class="w-full h-2 bg-surface-container-highest rounded overflow-hidden">
+                <div class="h-full w-1/3 bg-primary animate-pulse"></div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(progress?.Detail))
+            {
+                <p class="text-xs text-on-surface-variant mt-2 font-mono truncate">@progress.Detail</p>
+            }
+        </div>
+    }
+
+    <!-- ============ Sourcebooks ============ -->
+    @if (RulesDatabase.IsLoaded && _allSources.Count > 0)
+    {
+        <section class="mt-8 p-5 bg-surface-container-low rounded ghost-border">
+            <h2 class="font-headline text-xl font-bold text-on-surface mb-1">Sourcebooks</h2>
+            <p class="text-xs text-on-surface-variant mb-3">
+                Disable sourcebooks your group doesn't use. Applies to newly created characters.
+                Houserule (sourceless) content is always available.
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1 max-h-80 overflow-y-auto">
+                @foreach (var src in _allSources)
+                {
+                    <label class="inline-flex items-center gap-2 text-sm text-on-surface cursor-pointer py-1">
+                        <input type="checkbox" checked="@IsSourceEnabled(src)"
+                               @onchange="@(e => ToggleSource(src, (bool)e.Value!))" />
+                        <span>@src</span>
+                    </label>
+                }
+            </div>
+        </section>
+    }
+</main>
+
+@code {
+    private bool _busy;
+    private string? _message;
+    private bool _isError;
+
+    private PartSourceKind _kind = PartSourceKind.GitHub;
+    private string? _ownerRepo;
+    private string _ref = "master";
+    private string? _hostUrl;
+    private PartUpdateReport? _report;
+
+    private List<string> _allSources = [];
+    private HashSet<string> _enabledSources = new(StringComparer.OrdinalIgnoreCase);
+    private bool _allSourcesEnabled = true;
+
+    protected override void OnInitialized()
+    {
+        var cfg = Preferences.LoadSourceConfig();
+        if (cfg is not null)
+        {
+            _kind = cfg.Kind;
+            if (!string.IsNullOrWhiteSpace(cfg.Owner) && !string.IsNullOrWhiteSpace(cfg.Repo))
+                _ownerRepo = $"{cfg.Owner}/{cfg.Repo}";
+            _ref = string.IsNullOrWhiteSpace(cfg.Ref) ? "master" : cfg.Ref;
+            _hostUrl = cfg.Kind == PartSourceKind.WebPageIndex ? cfg.PageUrl : cfg.HostBaseUrl;
+        }
+
+        _allSources = RulesDatabase.IsLoaded
+            ? RulesDatabase.GetDistinctSources().OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList()
+            : [];
+
+        var persisted = Preferences.LoadEnabledSources();
+        if (persisted is { Count: > 0 })
+        {
+            _enabledSources = new HashSet<string>(persisted, StringComparer.OrdinalIgnoreCase);
+            _allSourcesEnabled = false;
+            SessionService.EnabledSources = _enabledSources;
+        }
+        else
+        {
+            // No restriction persisted → all sources enabled.
+            _enabledSources = new HashSet<string>(_allSources, StringComparer.OrdinalIgnoreCase);
+            _allSourcesEnabled = true;
+        }
+
+        RulesDatabase.Changed += HandleRulesDatabaseChanged;
+    }
+
+    private void HandleRulesDatabaseChanged() => NotifyStateChanged();
+
+    protected override void OnDispose()
+    {
+        RulesDatabase.Changed -= HandleRulesDatabaseChanged;
+    }
+
+    private bool IsSourceEnabled(string source) =>
+        _allSourcesEnabled || _enabledSources.Contains(source);
+
+    private void ToggleSource(string source, bool enabled)
+    {
+        if (_allSourcesEnabled)
+        {
+            // Materialize the full set before removing the first one.
+            _enabledSources = new HashSet<string>(_allSources, StringComparer.OrdinalIgnoreCase);
+            _allSourcesEnabled = false;
+        }
+
+        if (enabled) _enabledSources.Add(source);
+        else _enabledSources.Remove(source);
+
+        bool everythingOn = _enabledSources.Count >= _allSources.Count;
+        IReadOnlySet<string>? toApply = everythingOn ? null : _enabledSources;
+
+        Preferences.SaveEnabledSources(toApply);
+        SessionService.EnabledSources = toApply;
+        _allSourcesEnabled = everythingOn;
+    }
+
+    private IReadOnlyList<PartManifestEntry> GetLayers() => Parts.GetLayers();
+
+    /// <summary>Display a part version, or a placeholder when the source doesn't expose one (e.g. GitHub).</summary>
+    private static string FormatVersion(string? version) =>
+        string.IsNullOrWhiteSpace(version) ? "—" : $"v{version}";
+
+    private PartSourceConfig? BuildConfig()
+    {
+        if (_kind == PartSourceKind.GitHub)
+        {
+            var parts = (_ownerRepo ?? "").Split('/', 2, StringSplitOptions.TrimEntries);
+            if (parts.Length != 2 || parts[0].Length == 0 || parts[1].Length == 0)
+            {
+                SetMessage("Enter the GitHub source as owner/repo.", isError: true);
+                return null;
+            }
+            return PartSourceConfig.GitHubRepo(parts[0], parts[1], _ref);
+        }
+        if (string.IsNullOrWhiteSpace(_hostUrl))
+        {
+            SetMessage(_kind == PartSourceKind.WebPageIndex
+                ? "Enter the index page URL."
+                : "Enter the CBLoader host base URL.", isError: true);
+            return null;
+        }
+        return _kind == PartSourceKind.WebPageIndex
+            ? PartSourceConfig.WebPageIndex(_hostUrl)
+            : PartSourceConfig.CbloaderHost(_hostUrl);
+    }
+
+    private async Task CheckUpdatesAsync()
+    {
+        var config = BuildConfig();
+        if (config is null) return;
+        Preferences.SaveSourceConfig(config);
+
+        await RunAsync(async () =>
+        {
+            _report = await Parts.CheckForUpdatesAsync(config);
+            SetMessage(_report.HasUpdates ? "Updates available." : "Everything is up to date.", isError: false);
+        });
+    }
+
+    private async Task ApplyUpdatesAsync()
+    {
+        var config = BuildConfig();
+        if (config is null || _report is null) return;
+
+        var toInstall = _report.New.Concat(_report.Updated)
+            .Where(e => e.Remote is not null).Select(e => e.Remote!).ToList();
+
+        await RunAsync(async () =>
+        {
+            await Parts.ApplyUpdatesAsync(config, toInstall);
+            _report = await Parts.CheckForUpdatesAsync(config);
+            SetMessage($"Installed {toInstall.Count} part(s) and rebuilt the database.", isError: false);
+        });
+    }
+
+    // Pending part-id → desired enabled state. Only holds entries whose desired
+    // state DIFFERS from the persisted manifest, so an empty map means "nothing
+    // to apply". Cleared after a successful Apply.
+    private readonly Dictionary<string, bool> _pending = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool EffectiveEnabled(PartManifestEntry part) =>
+        _pending.TryGetValue(part.PartId, out var desired) ? desired : part.Enabled;
+
+    private void SetPending(PartManifestEntry part, bool enabled)
+    {
+        // Track only real deltas from the persisted state.
+        if (part.Enabled == enabled)
+            _pending.Remove(part.PartId);
+        else
+            _pending[part.PartId] = enabled;
+    }
+
+    private void TogglePart(PartManifestEntry part, bool enabled) => SetPending(part, enabled);
+
+    private void ToggleCategory(IReadOnlyList<PartManifestEntry> parts, bool enabled)
+    {
+        foreach (var part in parts)
+            SetPending(part, enabled);
+    }
+
+    private void DiscardPendingChanges()
+    {
+        _pending.Clear();
+        SetMessage("Discarded pending changes.", isError: false);
+    }
+
+    private async Task ApplyPendingChangesAsync()
+    {
+        if (_pending.Count == 0) return;
+
+        var states = new Dictionary<string, bool>(_pending, StringComparer.OrdinalIgnoreCase);
+        await RunAsync(async () =>
+        {
+            await Parts.ApplyPartStatesAsync(states);
+            _pending.Clear();
+            int enabled = states.Count(kvp => kvp.Value);
+            int disabled = states.Count - enabled;
+            SetMessage($"Applied {states.Count} change(s) (+{enabled} / -{disabled}) and rebuilt the database.", isError: false);
+        });
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        _message = null;
+        StateHasChanged();
+        try { await action(); }
+        catch (Exception ex) { SetMessage(ex.Message, isError: true); }
+        finally { _busy = false; StateHasChanged(); }
+    }
+
+    private void SetMessage(string message, bool isError)
+    {
+        _message = message;
+        _isError = isError;
+    }
+}

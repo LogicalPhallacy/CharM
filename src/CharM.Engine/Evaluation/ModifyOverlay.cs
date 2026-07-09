@@ -30,10 +30,36 @@ public sealed class ModifyOverlay
     }
 
     /// <summary>
+    /// Get all field modifications recorded for a single element, using a lazily
+    /// built per-element index instead of scanning the entire overlay. The index
+    /// is invalidated on any mutation.
+    /// </summary>
+    public IReadOnlyList<(string Field, string Value)> GetModificationsFor(string elementId)
+    {
+        var index = _byElement ??= BuildByElementIndex();
+        return index.TryGetValue(elementId, out var list) ? list : [];
+    }
+
+    private Dictionary<string, List<(string Field, string Value)>>? _byElement;
+
+    private Dictionary<string, List<(string Field, string Value)>> BuildByElementIndex()
+    {
+        var index = new Dictionary<string, List<(string Field, string Value)>>(StringComparer.Ordinal);
+        foreach (var ((elementId, field), value) in _overrides)
+        {
+            if (!index.TryGetValue(elementId, out var list))
+                index[elementId] = list = [];
+            list.Add((field, value));
+        }
+        return index;
+    }
+
+    /// <summary>
     /// Apply a ModifyDirective to the overlay.
     /// </summary>
     public void Apply(ModifyDirective directive, RulesElement targetElement)
     {
+        _byElement = null; // invalidate per-element index on mutation
         if (directive.DieIncrease is > 0)
         {
             ApplyDieIncrease(directive, targetElement);
@@ -144,7 +170,11 @@ public sealed class ModifyOverlay
     /// <summary>
     /// Clear all modifications (used when re-evaluating character).
     /// </summary>
-    public void Clear() => _overrides.Clear();
+    public void Clear()
+    {
+        _overrides.Clear();
+        _byElement = null;
+    }
 
     /// <summary>
     /// Get all active modifications (for debugging/inspection).

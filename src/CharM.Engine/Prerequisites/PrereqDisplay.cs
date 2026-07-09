@@ -27,9 +27,10 @@ namespace CharM.Engine.Prerequisites;
 ///     rewrite the engine operators to plain English connectors.</item>
 /// </list>
 /// </summary>
-public static class PrereqDisplay
+public static partial class PrereqDisplay
 {
-    private static readonly Regex IdToken = new(@"ID_[A-Z0-9_]+", RegexOptions.Compiled);
+    [GeneratedRegex(@"ID_[A-Z0-9_]+")]
+    private static partial Regex IdToken();
 
     /// <summary>
     /// Build a plain-English prerequisite string for <paramref name="element"/>.
@@ -131,7 +132,7 @@ public static class PrereqDisplay
         if (findById is null || !text.Contains("ID_", StringComparison.Ordinal))
             return text;
 
-        return IdToken.Replace(text, match =>
+        return IdToken().Replace(text, match =>
         {
             var resolved = findById(match.Value);
             if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.Name))

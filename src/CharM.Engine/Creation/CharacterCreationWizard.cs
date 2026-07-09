@@ -41,6 +41,31 @@ public sealed partial class CharacterCreationWizard : ICharacterState
     private AbilityScoreSet? _abilityScores;
     private bool _scoresSet;
 
+    // Enabled sourcebook set for candidate filtering (multi-source enable/
+    // disable). Null means all sources allowed. Changing it clears the
+    // candidate cache so disabled-source elements stop appearing immediately.
+    private IReadOnlySet<string>? _enabledSources;
+
+    /// <summary>
+    /// Restrict candidate elements to the given set of sourcebooks (by their
+    /// <c>Source</c> field). Pass null to allow all sources. Elements with no
+    /// source (houserules) are always allowed. Clears the candidate cache.
+    /// </summary>
+    public void SetEnabledSources(IReadOnlySet<string>? sources)
+    {
+        _enabledSources = sources is { Count: > 0 } ? sources : null;
+        InvalidateCandidateCache();
+    }
+
+    private bool IsSourceAllowed(string? source)
+    {
+        if (_enabledSources is null) return true;
+        // Houserules / sourceless elements are never filtered out by the
+        // enabled-sourcebook set.
+        if (string.IsNullOrEmpty(source)) return true;
+        return _enabledSources.Contains(source);
+    }
+
     private void InvalidateCandidateCache() => _candidateCache.Clear();
 
     /// <summary>Current wizard step.</summary>
@@ -251,7 +276,8 @@ public sealed partial class CharacterCreationWizard : ICharacterState
                 prereqCheck: null,
                 _tree.HasElement,
                 characterLevel: Level,
-                resolveNameToId);
+                resolveNameToId,
+                sourceAllowed: IsSourceAllowed);
             _candidateCache[cacheKey] = cachedRaw;
         }
 

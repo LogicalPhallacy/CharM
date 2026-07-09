@@ -7,6 +7,7 @@
 @using CharM.Web.Components.Shared
 @using CharM.Web.Services
 @inject CharacterSessionService SessionService
+@inject RulesDatabaseService RulesDatabase
 @inject CharacterRestoreState RestoreState
 @inject PrintCardCollector Collector
 @inject IJSRuntime JS
@@ -497,6 +498,7 @@
 
     .print-sheet.theme-bw .pcard-header { background: white; color: black; border-bottom: 1.5px solid black; }
     .print-sheet.theme-bw .pcard.daily .pcard-header { background: black; color: white; }
+    .print-sheet.theme-bw .pcard.encounter .pcard-header { background: #d9d9d9; color: black; border-bottom: 1.5px solid black; }
 
     .pcard-name {
         font-size: 10pt;
@@ -516,6 +518,8 @@
         padding: 5px 6px;
         overflow: hidden;
         font-size: 8pt;
+        display: flex;
+        flex-direction: column;
     }
 
     .pcard-stats {
@@ -534,6 +538,21 @@
 
     .pcard-entry { margin-bottom: 2px; }
     .pcard-entry strong { font-weight: 700; }
+
+    /* Source citation pinned to the bottom-right of each power card. */
+    .pcard-source {
+        margin-top: auto;
+        padding-top: 2px;
+        text-align: right;
+        font-size: 6pt;
+        font-style: italic;
+        color: var(--ink-soft);
+    }
+
+    /* Inline tables embedded in power text (e.g. Hunter's Quarry). */
+    .power-entry-table { font-size: 6.5pt; border-collapse: collapse; width: 100%; margin: 2px 0; }
+    .power-entry-table th, .power-entry-table td { border: 0.4pt solid var(--rule); padding: 0 2px; text-align: left; vertical-align: top; }
+    .print-sheet.theme-bw .power-entry-table th, .print-sheet.theme-bw .power-entry-table td { border-color: black; }
 
     /* ---- Cut marks (only when enabled) ------------------------------- */
     .print-sheet.cuts-on .pcard::before,
@@ -684,6 +703,7 @@
         padding: 2px 0;
         border-bottom: 1px dotted var(--rule-soft);
     }
+    .ritual-src { color: var(--ink-soft); font-size: 7pt; font-style: italic; margin-left: 6px; }
 
     .inv-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
     .inv-table th {
@@ -744,6 +764,7 @@
 else
 {
     var snapshot = session.GetPartialSnapshot();
+    var vocab = RulesDatabase.Vocabulary;
     var collection = Collector.Collect();
     var cards = collection.AllNonCompanion;
 
@@ -825,7 +846,7 @@ else
                     {
                         int score = snapshot?.GetStat(abilityName) ?? 10;
                         int mod = (score - 10) / 2 + (session.Level / 2);
-                        var linked = _abilityToSkills[abilityName];
+                        var linked = vocab.SkillsByAbility[abilityName];
 
                         <div class="as-row">
                             <div class="as-ability">
@@ -836,7 +857,7 @@ else
                             @if (!SeparateSkillsBlock)
                             {
                                 <div class="as-skills">
-                                    @if (linked.Length == 0)
+                                    @if (linked.Count == 0)
                                     {
                                         <div class="as-skill no-skills">—</div>
                                     }
@@ -865,7 +886,7 @@ else
                             Skills
                         </div>
                         <div>
-                            @foreach (var skill in _allSkillsAlphabetical)
+                            @foreach (var skill in vocab.SkillNames)
                             {
                                 int skillVal = snapshot?.GetStat(skill) ?? 0;
                                 bool trained = IsTrained(snapshot, skill);
@@ -917,7 +938,7 @@ else
                     <div class="panel">
                         <div class="panel-title">Defenses</div>
                         <div class="defense-grid">
-                            @foreach (var (statName, label) in new[] { ("AC", "AC"), ("Fortitude Defense", "FORT"), ("Reflex Defense", "REFL"), ("Will Defense", "WILL") })
+                            @foreach (var (statName, label) in CharacterStatNames.Defenses)
                             {
                                 int val = snapshot?.GetStat(statName) ?? 10;
                                 <div class="defense-box">
@@ -927,12 +948,7 @@ else
                             }
                         </div>
 
-                        @foreach (var (statName, label) in new[] {
-                            ("Initiative", "Initiative"),
-                            ("Speed", "Speed"),
-                            ("Passive Insight", "Passive Insight"),
-                            ("Passive Perception", "Passive Perception")
-                        })
+                        @foreach (var (statName, label) in CharacterStatNames.Derived)
                         {
                             int val = snapshot?.GetStat(statName) ?? 0;
                             <div class="tac-row">
@@ -1262,7 +1278,11 @@ else
                                     }
                                     @foreach (var entry in card.Entries.Take(4))
                                     {
-                                        <div class="pcard-entry"><strong>@entry.Label:</strong> @entry.Text</div>
+                                        <PowerEntryText Entry="entry" Class="pcard-entry" />
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(card.SourceCite))
+                                    {
+                                        <div class="pcard-source">@card.SourceCite</div>
                                     }
                                 </div>
                             </div>
@@ -1283,7 +1303,8 @@ else
                                     </div>
                                 }
                                 @if (card.WeaponStats.Count > 0) { <PowerWeaponStatsTable Card="card" /> }
-                                @foreach (var entry in card.Entries.Take(4)) { <div class="pcard-entry"><strong>@entry.Label:</strong> @entry.Text</div> }
+                                @foreach (var entry in card.Entries.Take(4)) { <PowerEntryText Entry="entry" Class="pcard-entry" /> }
+                                @if (!string.IsNullOrWhiteSpace(card.SourceCite)) { <div class="pcard-source">@card.SourceCite</div> }
                             </div>
                         </div>
                     }
@@ -1336,9 +1357,11 @@ else
                                 }
                                 @foreach (var entry in card.Entries.Take(4))
                                 {
-                                    <div class="pcard-entry">
-                                        <strong>@entry.Label:</strong> @entry.Text
-                                    </div>
+                                    <PowerEntryText Entry="entry" Class="pcard-entry" />
+                                }
+                                @if (!string.IsNullOrWhiteSpace(card.SourceCite))
+                                {
+                                    <div class="pcard-source">@card.SourceCite</div>
                                 }
                             </div>
                         </div>
@@ -1362,7 +1385,14 @@ else
                         @foreach (var entry in kindGroup.OrderBy(r => GetElementLevel(r.Element)).ThenBy(r => r.Element.Name))
                         {
                             <div class="ritual-row">
-                                <div>@entry.Element.Name</div>
+                                <div>
+                                    @entry.Element.Name
+                                    @{ var ritualSrc = GetSource(entry.Element); }
+                                    @if (!string.IsNullOrEmpty(ritualSrc))
+                                    {
+                                        <span class="ritual-src">@ritualSrc</span>
+                                    }
+                                </div>
                                 <div style="text-align:center;color:var(--ink-soft)">Lvl @GetElementLevel(entry.Element)</div>
                                 <div style="text-align:right;color:var(--ink-soft);font-size:8pt">@(entry.Quantity > 1 ? $"×{entry.Quantity}" : "")</div>
                             </div>
@@ -1421,34 +1451,7 @@ else
     [CascadingParameter(Name = "SeparateSkillsBlock")] public bool SeparateSkillsBlock { get; set; }
 
     private static readonly (string Name, Ability Ability)[] _abilities =
-    [
-        ("Strength", Ability.Strength),
-        ("Constitution", Ability.Constitution),
-        ("Dexterity", Ability.Dexterity),
-        ("Intelligence", Ability.Intelligence),
-        ("Wisdom", Ability.Wisdom),
-        ("Charisma", Ability.Charisma),
-    ];
-
-    // (Skill name, ability) — order matches the Essentials sheet's
-    // ability-grouped layout, which the web UI also follows.
-    private static readonly Dictionary<string, string[]> _abilityToSkills = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Strength"] = ["Athletics"],
-        ["Constitution"] = ["Endurance"],
-        ["Dexterity"] = ["Acrobatics", "Stealth", "Thievery"],
-        ["Intelligence"] = ["Arcana", "History", "Religion"],
-        ["Wisdom"] = ["Dungeoneering", "Heal", "Insight", "Nature", "Perception"],
-        ["Charisma"] = ["Bluff", "Diplomacy", "Intimidate", "Streetwise"],
-    };
-
-    private static readonly string[] _allSkillsAlphabetical =
-    [
-        "Acrobatics", "Arcana", "Athletics", "Bluff", "Diplomacy",
-        "Dungeoneering", "Endurance", "Heal", "History", "Insight",
-        "Intimidate", "Nature", "Perception", "Religion", "Stealth",
-        "Streetwise", "Thievery",
-    ];
+        AbilityNames.StandardOrder.Select(a => (AbilityNames.GetFullName(a), a)).ToArray();
 
     protected override void OnInitialized()
     {
@@ -1578,13 +1581,28 @@ else
 
         if (detail.Fields.TryGetValue("Short Description", out var sd) && !string.IsNullOrWhiteSpace(sd))
         {
-            // One-line clamp is enforced by CSS (white-space: nowrap +
-            // text-overflow: ellipsis), so we don't truncate here —
-            // the layout will trim with an ellipsis to whatever width
-            // the column has.
+            // One-line clamp is enforced by CSS, so we don't truncate here —
+            // the layout trims with an ellipsis to whatever width the column has.
             return sd;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Resolve the source book for a build-choice / ritual element, falling back
+    /// to the database record for in-tree wrappers that don't carry the source
+    /// on the element itself. The rules data has no page numbers, so the
+    /// citation is the book name only.
+    /// </summary>
+    private string? GetSource(RulesElement element)
+    {
+        if (!string.IsNullOrWhiteSpace(element.Source))
+            return element.Source;
+
+        var detail = element.InternalId is { Length: > 0 } id
+            ? SessionService.GetElementDetails(id)
+            : null;
+        return string.IsNullOrWhiteSpace(detail?.Source) ? null : detail!.Source;
     }
 
     private static string GetLootWeight(LootItem loot)

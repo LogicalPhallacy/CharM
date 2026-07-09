@@ -6,6 +6,7 @@ namespace CharM.Web.Services;
 public sealed class CalculationBreakdownService
 {
     private readonly CharacterSessionService? _sessionService;
+    private readonly RulesDatabaseService? _rulesDb;
 
     public CalculationBreakdownService()
     {
@@ -14,6 +15,12 @@ public sealed class CalculationBreakdownService
     public CalculationBreakdownService(CharacterSessionService sessionService)
     {
         _sessionService = sessionService;
+    }
+
+    public CalculationBreakdownService(CharacterSessionService sessionService, RulesDatabaseService rulesDb)
+    {
+        _sessionService = sessionService;
+        _rulesDb = rulesDb;
     }
 
     public CalculationBreakdown Build(StatBlock? stats, string statName)
@@ -60,7 +67,7 @@ public sealed class CalculationBreakdownService
             Expression: contribution.Expression?.ToString());
     }
 
-    private static string InferDefaultLabel(StatContribution contribution, string statName, int value)
+    private string InferDefaultLabel(StatContribution contribution, string statName, int value)
     {
         if (contribution.Expression is ValueExpression.AbilityModifier
             or ValueExpression.AbilityModFunction)
@@ -74,7 +81,7 @@ public sealed class CalculationBreakdownService
             : contribution.BonusType!;
     }
 
-    private static void ApplySkillLabels(string statName, List<CalculationContributionRow> rows)
+    private void ApplySkillLabels(string statName, List<CalculationContributionRow> rows)
     {
         if (!IsSkill(statName))
             return;
@@ -91,16 +98,11 @@ public sealed class CalculationBreakdownService
             rows[untypedPositive[1].index] = untypedPositive[1].row with { Label = "Trained" };
     }
 
-    private static bool IsSkill(string statName)
-        => SkillNames.Contains(statName);
-
-    private static readonly HashSet<string> SkillNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Acrobatics", "Arcana", "Athletics", "Bluff", "Diplomacy",
-        "Dungeoneering", "Endurance", "Heal", "History", "Insight",
-        "Intimidate", "Nature", "Perception", "Religion", "Stealth",
-        "Streetwise", "Thievery",
-    };
+    // Skill set comes from the loaded rules database (cached vocabulary), so it
+    // tracks the actual ruleset instead of a hardcoded list. Falls back to "not
+    // a skill" (labels are cosmetic) when no database is available.
+    private bool IsSkill(string statName)
+        => _rulesDb is { IsLoaded: true } db && db.Vocabulary.SkillNameSet.Contains(statName);
 }
 
 public sealed record CalculationBreakdown(

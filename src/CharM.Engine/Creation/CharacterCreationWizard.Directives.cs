@@ -288,29 +288,7 @@ public sealed partial class CharacterCreationWizard
     /// Keeps retrying until no more progress is made (fixed-point iteration).
     /// </summary>
     private bool ProcessDeferredGrants(int characterLevel)
-    {
-        bool anyProgress = false;
-        bool progress = true;
-        int maxIterations = _deferredGrants.Count + 1;
-        while (progress && _deferredGrants.Count > 0 && maxIterations-- > 0)
-        {
-            progress = false;
-            for (int i = _deferredGrants.Count - 1; i >= 0; i--)
-            {
-                var (grant, parent, deferredLevel) = _deferredGrants[i];
-                var child = _tree.ProcessGrant(grant, parent, deferredLevel);
-                if (child?.RulesElement is { } grantedElement)
-                {
-                    _deferredGrants.RemoveAt(i);
-                    ExecutePhase1(grantedElement, child, deferredLevel);
-                    progress = true;
-                    anyProgress = true;
-                }
-            }
-        }
-
-        return anyProgress;
-    }
+        => Phase1Cascade.ProcessDeferredGrants(_tree, _deferredGrants, ExecutePhase1);
 
     private void ProcessStateChanges(int characterLevel)
     {
@@ -345,10 +323,17 @@ public sealed partial class CharacterCreationWizard
             }
         }
 
-        var existingSlots = _tree.GetAllChoices()
-            .Where(slot => !string.IsNullOrWhiteSpace(slot.DirectiveKey))
-            .GroupBy(slot => slot.DirectiveKey!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var existingSlots = new Dictionary<string, ChoiceSlot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var slot in _tree.GetAllChoices())
+        {
+            if (string.IsNullOrWhiteSpace(slot.DirectiveKey))
+                continue;
+            // First-wins per directive key (matches the previous
+            // GroupBy(...).ToDictionary(g => g.First()) semantics), without the
+            // intermediate IGrouping allocations — this runs on the full tree
+            // after every pick.
+            existingSlots.TryAdd(slot.DirectiveKey!, slot);
+        }
 
         bool changed = false;
 

@@ -24,35 +24,7 @@
         </div>
         <span class="material-symbols-outlined @Card.HeaderIconClass">@Card.HeaderIcon</span>
     </div>
-    <div class="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white power-card-content">
-        @foreach (var stat in Card.ListStats)
-        {
-            <div class="space-y-1">
-                <span class="font-label text-[10px] uppercase text-outline tracking-wider">@stat.Label</span>
-                <p class="font-body font-bold @(stat.Label == "Hit" ? "text-xs leading-tight" : "text-sm") @(stat.Label == "Keywords" ? "italic" : string.Empty)">
-                    <PowerStatLineValue Line="stat" PowerName="@Card.Name" />
-                </p>
-            </div>
-        }
-        <PowerWeaponStatsTable Card="Card" />
-        <div class="col-span-full pt-2 border-t border-surface-container mt-2">
-            @if (!string.IsNullOrWhiteSpace(Card.Flavor))
-            {
-                <p class="text-sm leading-relaxed text-on-surface-variant italic">@Card.Flavor</p>
-            }
-            @if (Card.Entries.Count > 0)
-            {
-                <div class="space-y-2 @(!string.IsNullOrWhiteSpace(Card.Flavor) ? "mt-2" : string.Empty)">
-                    @foreach (var entry in Card.Entries)
-                    {
-                        <p class="text-sm leading-relaxed">
-                            <strong class="font-bold @entry.LabelClass">@entry.Label:</strong> @entry.Text
-                        </p>
-                    }
-                </div>
-            }
-        </div>
-    </div>
+    <PowerCardBody Card="Card" />
 </div>
 
 @code {

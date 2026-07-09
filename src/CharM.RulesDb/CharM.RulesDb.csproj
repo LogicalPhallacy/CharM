@@ -6,6 +6,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <!--
+      Override the SQLitePCLRaw bundle that Microsoft.Data.Sqlite pulls in
+      transitively (2.1.11), which bundles a native SQLite with a high-severity
+      vulnerability (GHSA-2m69-gcr7-jv3q). 3.0.3 is the current bundle release;
+      it brings in the patched native SQLitePCLRaw.lib.e_sqlite3 (3.50.x).
+      Microsoft.Data.Sqlite.Core only requires SQLitePCLRaw.core >= 2.1.11, so
+      the 3.x line satisfies it. Revisit once Microsoft.Data.Sqlite references a
+      fixed bundle itself.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="LibArchive.Net" Version="0.3.1" />
   </ItemGroup>
 

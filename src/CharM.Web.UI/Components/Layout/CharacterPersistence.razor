@@ -79,20 +79,23 @@
                 return;
             }
 
-            // We have bytes to import — surface the loading modal.
-            // Yield explicitly so Blazor renders the RestoreOverlay before
-            // the synchronous base64-decode + import burns CPU. Without this,
-            // the entire Restoring→Idle transition can complete in one render
-            // frame and the user never sees the spinner (especially in MAUI's
-            // BlazorWebView where there's no SignalR hop to force a yield).
+            // We have a saved blob. Replay-state JSON starts with '{'; anything
+            // else is the legacy/imported base64 .dnd4e format.
             RestoreState.Set(RestorePhase.Restoring);
             await Task.Yield();
 
             try
             {
-                var bytes = Convert.FromBase64String(saved);
-                using var ms = new MemoryStream(bytes);
-                await SessionService.ImportFromDnd4eAsync(ms);
+                if (saved.TrimStart().StartsWith('{'))
+                {
+                    SessionService.RestoreFromReplayJson(saved);
+                }
+                else
+                {
+                    var bytes = Convert.FromBase64String(saved);
+                    using var ms = new MemoryStream(bytes);
+                    await SessionService.ImportFromDnd4eAsync(ms);
+                }
                 _restoreAttempted = true;
             }
             catch
@@ -144,12 +147,24 @@
         if (!_canUseBrowserStorage || !SessionService.HasSession)
             return;
 
-        var bytes = SessionService.ExportToDnd4e();
-        if (bytes is null || bytes.Length == 0) return;
+        // App-created sessions persist as lossless replay JSON (preserves pending
+        // choices); imported sessions persist as base64 .dnd4e (already lossless
+        // and re-derives their pending choices on restore).
+        var replayJson = SessionService.SerializeReplayStateOrNull();
+        string? encoded;
+        if (replayJson is not null)
+        {
+            encoded = replayJson;
+        }
+        else
+        {
+            var bytes = SessionService.ExportToDnd4e();
+            if (bytes is null || bytes.Length == 0) return;
+            encoded = Convert.ToBase64String(bytes);
+        }
 
         try
         {
-            var encoded = Convert.ToBase64String(bytes);
             await Storage.SetActiveCharacterAsync(encoded);
         }
         catch

@@ -948,7 +948,18 @@ public static class Dnd4eWriter
             return string.IsNullOrEmpty(appearance)
                 ? $"{name} - Level {charLevel} {companion.Category}"
                 : $"{name} - Level {charLevel} {appearance}";
-        return $"Level {charLevel} {companion.Category} Companion";
+
+        // OCB's beast name is "Level N <BeastName>". For FMP mounts/animal
+        // companions the Category is a bare creature noun ("Cat", "Bear"),
+        // so OCB appends " Companion" → "Cat Companion". For the HoFK
+        // Sentinel companions the element name already carries the suffix
+        // ("Wolf Companion", "Bear Companion"), so appending again would
+        // double it. Only append when the Category isn't already a
+        // "... Companion" string.
+        var category = companion.Category?.Trim() ?? string.Empty;
+        if (category.EndsWith("Companion", StringComparison.OrdinalIgnoreCase))
+            return $"Level {charLevel} {category}";
+        return $"Level {charLevel} {category} Companion";
     }
 
     private static string FormatBeastAbilityScores(CompanionData companion)

@@ -10,13 +10,14 @@ namespace CharM.Engine.Creation;
 public sealed partial class CharacterCreationWizard
 {
     /// <summary>
-    /// Get pending choices from the tree, including wanted optional choices
-    /// (Paragon Path at level ≥ 11, Epic Destiny at level ≥ 21, Background always).
+    /// Enumerate the pending (unfilled, non-skipped, step-available) choice
+    /// slots from the tree, paired with their wizard step. Shared by the
+    /// label-building <see cref="GetPendingChoicesFromTree"/> and the
+    /// label-free <see cref="GetPendingSlotsFromTree"/> so neither duplicates
+    /// the filtering rules.
     /// </summary>
-    private IReadOnlyList<PendingChoice> GetPendingChoicesFromTree()
+    private IEnumerable<(WizardStep Step, ChoiceSlot Slot)> EnumeratePendingSlots()
     {
-        var result = new List<PendingChoice>();
-
         foreach (var slot in _tree.GetAllChoices())
         {
             if (slot.SelectedElements.Count >= slot.Number)
@@ -31,10 +32,36 @@ public sealed partial class CharacterCreationWizard
             if (slot.Optional && !IsWantedOptional(slot))
                 continue;
 
+            yield return (step, slot);
+        }
+    }
+
+    /// <summary>
+    /// Get pending choices from the tree, including wanted optional choices
+    /// (Paragon Path at level ≥ 11, Epic Destiny at level ≥ 21, Background always).
+    /// </summary>
+    private IReadOnlyList<PendingChoice> GetPendingChoicesFromTree()
+    {
+        var result = new List<PendingChoice>();
+        foreach (var (step, slot) in EnumeratePendingSlots())
+        {
             string desc = SlotLabel.Resolve(slot, _findById);
             result.Add(new PendingChoice(step, desc, slot));
         }
+        return result;
+    }
 
+    /// <summary>
+    /// Like <see cref="GetPendingChoicesFromTree"/> but returns just the slots,
+    /// skipping the per-slot <see cref="SlotLabel.Resolve"/> display-label work.
+    /// The positional importer matches slots by owner/type only and calls this
+    /// many times during alignment, so avoiding the label computation matters.
+    /// </summary>
+    internal IReadOnlyList<ChoiceSlot> GetPendingSlotsFromTree()
+    {
+        var result = new List<ChoiceSlot>();
+        foreach (var (_, slot) in EnumeratePendingSlots())
+            result.Add(slot);
         return result;
     }
 
@@ -69,9 +96,7 @@ public sealed partial class CharacterCreationWizard
     private ChoiceSlot? GetPendingSlotForStep(WizardStep step)
     {
         return GetPendingChoicesFromTree()
-            .Where(p => p.Step == step)
-            .Select(p => p.Slot)
-            .FirstOrDefault();
+            .FirstOrDefault(p => p.Step == step)?.Slot;
     }
 
     /// <summary>

@@ -225,6 +225,32 @@ public sealed partial class CharacterSession
     /// <summary>Optional source book filter for candidate queries.</summary>
     public string? SourceFilter { get; set; }
 
+    /// <summary>
+    /// Part layers (id + version) the character was built with. Populated from
+    /// the rules database at build/import time and persisted in the CharM
+    /// extensions block so the character can be audited against the rules DB it
+    /// is later opened under (missing or newer parts raise an alert).
+    /// </summary>
+    public List<RecordedPart> BuildProvenance { get; } = [];
+
+    /// <summary>
+    /// Enabled sourcebooks for candidate filtering (multi-source enable/disable
+    /// in the creator session). Null or empty means all sources are allowed.
+    /// Setting this updates the current wizard and persists across internal
+    /// wizard rebuilds (Replay / RebuildFromHistory). Sourceless elements
+    /// (houserules) are always allowed regardless of this set.
+    /// </summary>
+    public IReadOnlySet<string>? EnabledSources
+    {
+        get => _enabledSources;
+        set
+        {
+            _enabledSources = value is { Count: > 0 } ? value : null;
+            _wizard.SetEnabledSources(_enabledSources);
+        }
+    }
+    private IReadOnlySet<string>? _enabledSources;
+
     /// <summary>Full ordered history of user choices (for undo and display).</summary>
     public IReadOnlyList<ChoiceRecord> ChoiceHistory => _choiceHistory;
 

@@ -1,3 +1,4 @@
+@using CharM.Engine.CharacterModel
 @using CharM.Engine.Rules
 @using CharM.Web.Services
 @inject CharacterSessionService SessionService
@@ -146,8 +147,7 @@
     private string _lootMode = "inventory";
     private string _equipSlot = "Main Hand";
 
-    private static readonly string[] EquipSlots =
-        ["Main Hand", "Off-Hand", "Chest", "Head", "Neck", "Arms", "Hands", "Waist", "Feet", "Ring 1", "Ring 2"];
+    private static readonly IReadOnlyList<string> EquipSlots = EquipmentSlots.DisplayOrder;
 
     private IReadOnlyList<RulesElement> Candidates
         => SessionService.GetHouseruleCandidates(_elementType, _searchText, limit: 100);

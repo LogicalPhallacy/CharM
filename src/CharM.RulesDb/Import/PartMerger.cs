@@ -1,9 +1,9 @@
-using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Xml.Linq;
 using CharM.Engine.Rules;
 using CharM.RulesDb.Storage;
 using Microsoft.Data.Sqlite;
+using static CharM.RulesDb.Import.RulesXmlImportHelpers;
 
 namespace CharM.RulesDb.Import;
 
@@ -26,36 +26,43 @@ public static partial class PartMerger
         _ = Directory.CreateDirectory(tempPath);
         try
         {
-            using var downloadClient = new HttpClient();
-            var indexUri = new Uri(indexFileUrl, UriKind.Absolute);
-
-            progress?.Report($"Downloading part index {indexUri}");
-            using var indexResp = downloadClient.GetAsync(indexUri).GetAwaiter().GetResult();
-            indexResp.EnsureSuccessStatusCode();
-
-            using var indexStream = indexResp.Content.ReadAsStream();
-            var doc = XDocument.Load(indexStream);
-            doc.Save(Path.Combine(tempPath, "WotC.index"));
-
-            List<Task> tasks = new();
-            foreach (var part in doc.Descendants("Part"))
-            {
-                string? filename = part.Element("Filename")?.Value?.Trim();
-                string? address = part.Element("PartAddress")?.Value.Trim();
-                if (string.IsNullOrWhiteSpace(filename) || string.IsNullOrWhiteSpace(address))
-                    continue;
-
-                var partUri = new Uri(indexUri, address);
-                tasks.Add(DownloadPart(downloadClient, partUri, filename, tempPath, progress));
-            }
-
-            Task.WhenAll(tasks).GetAwaiter().GetResult();
+            DownloadIndexParts(indexFileUrl, tempPath, progress);
             return Merge(dbPath, tempPath, progress);
         }
         finally
         {
             Directory.Delete(tempPath, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// Download every part referenced by a CBLoader index file into
+    /// <paramref name="destDirectory"/> (also saving the index as WotC.index).
+    /// Does not merge — used by the layered store so downloaded parts can be
+    /// archived and toggled like local ones.
+    /// </summary>
+    public static void DownloadIndexParts(string indexFileUrl, string destDirectory, IProgress<string>? progress = null)
+    {
+        Directory.CreateDirectory(destDirectory);
+        using var downloadClient = new HttpClient();
+        var indexUri = new Uri(indexFileUrl, UriKind.Absolute);
+
+        progress?.Report($"Downloading part index {indexUri}");
+        using var indexResp = downloadClient.GetAsync(indexUri).GetAwaiter().GetResult();
+        indexResp.EnsureSuccessStatusCode();
+
+        using var indexStream = indexResp.Content.ReadAsStream();
+        var doc = XDocument.Load(indexStream);
+        doc.Save(Path.Combine(destDirectory, "WotC.index"));
+
+        List<Task> tasks = new();
+        foreach (var (filename, address) in PartIndexReader.ReadPartEntries(doc))
+        {
+            var partUri = new Uri(indexUri, address);
+            tasks.Add(DownloadPart(downloadClient, partUri, filename, destDirectory, progress));
+        }
+
+        Task.WhenAll(tasks).GetAwaiter().GetResult();
     }
 
     private static async Task DownloadPart(
@@ -82,12 +89,27 @@ public static partial class PartMerger
     public static MergeResult Merge(string dbPath, string partsDirectory, IProgress<string>? progress = null)
     {
         var obsolete = LoadObsoleteSet(partsDirectory);
+        string? category = DeriveCategory(partsDirectory);
 
         var partFiles = Directory.GetFiles(partsDirectory, "*.part")
             .Where(f => !obsolete.Contains(Path.GetFileName(f)))
             .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+            .Select(f => new PartSourceFile(f, Path.GetFileName(f), category))
             .ToList();
 
+        return MergeFiles(dbPath, partFiles, progress);
+    }
+
+    /// <summary>
+    /// Merge an explicit, ordered list of part files into the database. Unlike
+    /// <see cref="Merge(string,string,IProgress{string})"/> this does not glob a
+    /// directory — the caller controls exactly which parts apply and in what
+    /// order. Used by the layered rebuild service to materialize a working DB
+    /// from a chosen enabled set.
+    /// </summary>
+    public static MergeResult MergeFiles(
+        string dbPath, IReadOnlyList<PartSourceFile> orderedParts, IProgress<string>? progress = null)
+    {
         int filesProcessed = 0, added = 0, updated = 0, deleted = 0, appended = 0;
 
         using var connection = new SqliteConnection($"Data Source={dbPath}");
@@ -99,20 +121,30 @@ public static partial class PartMerger
         RulesDbSchema.Create(connection);
 
         var jsonOptions = RulesDatabase.SharedJsonOptions;
+        int layerOrder = NextLayerOrder(connection);
 
-        foreach (var partFile in partFiles)
+        foreach (var part in orderedParts)
         {
-            string fileName = Path.GetFileName(partFile);
+            string fileName = Path.GetFileName(part.Path);
             progress?.Report($"  {fileName}");
 
             XDocument doc;
-            try { doc = XDocument.Load(partFile); }
+            try { doc = XDocument.Load(part.Path); }
             catch { continue; }
 
             var root = doc.Root;
             if (root is null) continue;
 
+            PartFileInfo partInfo;
+            try { partInfo = PartMetadataReader.Read(part.Path, partId: part.PartId, category: part.Category, isOfficial: part.IsOfficial); }
+            catch { partInfo = null!; }
+
             using var tx = connection.BeginTransaction();
+
+            if (partInfo is not null)
+                RegisterPart(connection, tx, partInfo, layerOrder++);
+
+            string partId = partInfo?.PartId ?? part.PartId;
 
             foreach (var el in root.Elements())
             {
@@ -124,6 +156,8 @@ public static partial class PartMerger
                         if (parsed is null) continue;
                         bool exists = ElementExists(connection, tx, parsed.Element.InternalId);
                         UpsertElement(connection, tx, parsed, jsonOptions);
+                        RecordProvenance(connection, tx, parsed.Element.InternalId, partId,
+                            exists ? "overwrite" : "create");
                         if (exists) updated++; else added++;
                         break;
                     }
@@ -132,6 +166,7 @@ public static partial class PartMerger
                         string? id = Attr(el, "internal-id");
                         if (id is null) continue;
                         appended += AppendToElement(connection, tx, id, el, jsonOptions);
+                        RecordProvenance(connection, tx, id, partId, "append");
                         break;
                     }
                     case "DeleteElement":
@@ -139,6 +174,7 @@ public static partial class PartMerger
                         string? id = Attr(el, "internal-id");
                         if (id is null) continue;
                         deleted += DeleteElement(connection, tx, id);
+                        RecordProvenance(connection, tx, id, partId, "delete");
                         break;
                     }
                     case "MassAppend":
@@ -146,7 +182,10 @@ public static partial class PartMerger
                         string? ids = Attr(el, "ids");
                         if (ids is null) continue;
                         foreach (var id in ids.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                        {
                             appended += AppendToElement(connection, tx, id, el, jsonOptions);
+                            RecordProvenance(connection, tx, id, partId, "append");
+                        }
                         break;
                     }
                 }
@@ -157,6 +196,73 @@ public static partial class PartMerger
         }
 
         return new MergeResult(filesProcessed, added, updated, deleted, appended);
+    }
+
+    private static readonly HashSet<string> KnownCategories =
+        new(RulePartCategories.ContentFolders, StringComparer.OrdinalIgnoreCase);
+
+    private static string? DeriveCategory(string partsDirectory)
+    {
+        string folder = Path.GetFileName(Path.TrimEndingDirectorySeparator(partsDirectory));
+        return KnownCategories.Contains(folder) ? folder : null;
+    }
+
+    private static int NextLayerOrder(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COALESCE(MAX(layer_order), 0) + 1 FROM part_registry";
+        var result = cmd.ExecuteScalar();
+        return result is long l ? (int)l : 1;
+    }
+
+    private static void RegisterPart(SqliteConnection conn, SqliteTransaction tx, PartFileInfo info, int layerOrder)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO part_registry
+                (part_id, filename, category, display_name, version,
+                 content_hash, source_url, enabled, layer_order, is_base, is_official, applied_at)
+            VALUES ($id, $fn, $cat, $disp, $ver, $hash, $url, 1, $order, 0, $official, $now)
+            ON CONFLICT(part_id) DO UPDATE SET
+                filename = excluded.filename,
+                category = excluded.category,
+                display_name = excluded.display_name,
+                version = excluded.version,
+                content_hash = excluded.content_hash,
+                source_url = excluded.source_url,
+                layer_order = excluded.layer_order,
+                is_official = excluded.is_official,
+                applied_at = excluded.applied_at
+            """;
+        cmd.Parameters.AddWithValue("$id", info.PartId);
+        cmd.Parameters.AddWithValue("$fn", info.Filename);
+        cmd.Parameters.AddWithValue("$cat", (object?)info.Category ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$disp", (object?)(info.Description ?? info.Filename) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$ver", (object?)info.Version ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$hash", info.ContentHash);
+        cmd.Parameters.AddWithValue("$url", (object?)info.PartAddress ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$order", layerOrder);
+        cmd.Parameters.AddWithValue("$official", info.IsOfficial ? 1 : 0);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void RecordProvenance(SqliteConnection conn, SqliteTransaction tx, string internalId, string partId, string op)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        // Last writer wins per (element, part): a part that touches an element
+        // multiple times records its final op.
+        cmd.CommandText = """
+            INSERT INTO part_provenance (internal_id, part_id, op)
+            VALUES ($id, $part, $op)
+            ON CONFLICT(internal_id, part_id) DO UPDATE SET op = excluded.op
+            """;
+        cmd.Parameters.AddWithValue("$id", internalId);
+        cmd.Parameters.AddWithValue("$part", partId);
+        cmd.Parameters.AddWithValue("$op", op);
+        cmd.ExecuteNonQuery();
     }
 
     // ========================================================================
@@ -202,20 +308,7 @@ public static partial class PartMerger
     {
         var element = parsed.Element;
 
-        // Serialize the ordered list-of-pairs view so duplicates (e.g. two
-        // <specific name="Hit"> children for primary/secondary attack) round-
-        // trip through the DB. Fall back to Fields if FieldEntries wasn't
-        // populated by the caller. Reader accepts both legacy object format
-        // and the array-of-pairs format.
-        IReadOnlyList<KeyValuePair<string, string>> entries = element.FieldEntries.Count > 0
-            ? element.FieldEntries
-            : element.Fields.Select(kv => new KeyValuePair<string, string>(kv.Key, kv.Value)).ToList();
-        string? fieldsJson = entries.Count > 0
-            ? JsonSerializer.Serialize(entries)
-            : null;
-        string? rulesJson = element.Rules.Count > 0
-            ? JsonSerializer.Serialize(element.Rules, jsonOptions)
-            : null;
+        var (fieldsJson, rulesJson) = RulesElementJson.Serialize(element);
 
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
@@ -248,21 +341,29 @@ public static partial class PartMerger
     {
         int count = 0;
 
-        var newDirectives = new List<RuleDirective>();
-        var newCategories = new List<string>();
-
+        // Route every child through the shared assembler so the append path
+        // handles <specific>/<Flavor>/<prereqs>/<print-prereqs> identically to
+        // the create path. Before this, AppendNodes silently dropped <specific>
+        // (and Flavor/prereqs) and never wrote fields_json — a data-loss bug.
+        var asm = new RulesElementAssembler();
         foreach (var child in appendEl.Elements())
-        {
-            switch (child.Name.LocalName)
-            {
-                case "rules":
-                    ParseRulesBlock(child, newDirectives);
-                    break;
-                case "Category":
-                    ParseCategories(child, newCategories);
-                    break;
-            }
-        }
+            asm.HandleChild(new XElementChildNode(child));
+
+        // Name/type are irrelevant for an append (the target already exists);
+        // pass the append node's own attrs for completeness. Description is not
+        // synthesized because no mixed-content text was fed to the assembler.
+        var appended = asm.Build(
+            internalId,
+            Attr(appendEl, "name") ?? string.Empty,
+            Attr(appendEl, "type") ?? string.Empty,
+            Attr(appendEl, "source"));
+
+        var newDirectives = appended.Element.Rules;
+        var newCategories = appended.Categories;
+        var newFieldEntries = appended.Element.FieldEntries;
+
+        if (newFieldEntries.Count > 0)
+            count += AppendFields(conn, tx, internalId, newFieldEntries);
 
         if (newDirectives.Count > 0)
         {
@@ -301,6 +402,53 @@ public static partial class PartMerger
         return count;
     }
 
+    /// <summary>
+    /// Merge appended field entries (from an <c>AppendNodes</c> block's
+    /// <c>&lt;specific&gt;</c>/<c>&lt;Flavor&gt;</c>/… children) into an
+    /// element's <c>fields_json</c>. Idempotent: an identical (name, value)
+    /// pair already present is not appended again, so re-merging the same part
+    /// doesn't grow the column.
+    /// </summary>
+    private static int AppendFields(
+        SqliteConnection conn, SqliteTransaction tx, string internalId,
+        IReadOnlyList<KeyValuePair<string, string>> newEntries)
+    {
+        string? existingJson = ReadFieldsJson(conn, tx, internalId);
+        var entries = RulesElementJson.DeserializeEntries(existingJson);
+
+        var seen = new HashSet<(string, string)>();
+        foreach (var e in entries) seen.Add((e.Key, e.Value));
+
+        int addedCount = 0;
+        foreach (var e in newEntries)
+        {
+            if (seen.Add((e.Key, e.Value)))
+            {
+                entries.Add(e);
+                addedCount++;
+            }
+        }
+
+        if (addedCount == 0) return 0;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "UPDATE rules_elements SET fields_json = $fields WHERE internal_id = $id";
+        cmd.Parameters.AddWithValue("$fields", (object?)RulesElementJson.SerializeEntries(entries) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$id", internalId);
+        return cmd.ExecuteNonQuery() > 0 ? addedCount : 0;
+    }
+
+    private static string? ReadFieldsJson(SqliteConnection conn, SqliteTransaction tx, string internalId)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT fields_json FROM rules_elements WHERE internal_id = $id";
+        cmd.Parameters.AddWithValue("$id", internalId);
+        var result = cmd.ExecuteScalar();
+        return result is DBNull or null ? null : (string)result;
+    }
+
     private static string? ReadRulesJson(SqliteConnection conn, SqliteTransaction tx, string internalId)
     {
         using var cmd = conn.CreateCommand();
@@ -337,7 +485,13 @@ public static partial class PartMerger
         var result = new List<RuleDirective>();
         foreach (var d in directives)
         {
-            string key = JsonSerializer.Serialize(d, d.GetType(), jsonOptions);
+            // Use the generic overload so serialization routes through the
+            // registered RuleDirectiveJsonConverter (keyed on the base type) and
+            // produces the canonical $type-discriminated form. The runtime-type
+            // overload (d.GetType()) resolves a converter for the concrete
+            // subtype, finds none, and silently falls through to reflection —
+            // a different, trimming-unsafe shape.
+            string key = JsonSerializer.Serialize<RuleDirective>(d, jsonOptions);
             if (seen.Add(key))
                 result.Add(d);
         }
@@ -358,93 +512,46 @@ public static partial class PartMerger
         if (name is null || type is null || internalId is null)
             return null;
 
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var fieldEntries = new List<KeyValuePair<string, string>>();
-        string? prereqs = null;
-        var categories = new List<string>();
-        var rules = new List<RuleDirective>();
+        var asm = new RulesElementAssembler();
 
         foreach (var child in el.Elements())
-        {
-            switch (child.Name.LocalName)
-            {
-                case "specific":
-                    string? fieldName = Attr(child, "name");
-                    if (fieldName is not null)
-                    {
-                        string value = child.Value.Trim();
-                        // Always record the raw entry so duplicates are
-                        // recoverable (e.g. Ravening Thought emits two
-                        // <specific name="Hit"> children). The lookup
-                        // Dictionary keeps the FIRST occurrence to match
-                        // OCB's RulesElementField behavior.
-                        fieldEntries.Add(new(fieldName, value));
-                        if (!fields.ContainsKey(fieldName))
-                            fields[fieldName] = value;
-                    }
-                    break;
-                case "Prereqs":
-                    prereqs = child.Value.Trim();
-                    break;
-                case "Category":
-                    ParseCategories(child, categories);
-                    break;
-                case "rules":
-                    ParseRulesBlock(child, rules);
-                    break;
-            }
-        }
+            asm.HandleChild(new XElementChildNode(child));
 
-        // Capture mixed-content text (description body) that sits as direct XText
+        // Mixed-content text (description body) that sits as direct XText
         // children of the RulesElement, e.g. body description after </rules>.
-        var descBuilder = new System.Text.StringBuilder();
-        foreach (var node in el.Nodes().OfType<System.Xml.Linq.XText>())
-            descBuilder.Append(node.Value);
-        string descText = NormalizeDescription(descBuilder.ToString());
-        if (descText.Length > 0 && !fields.ContainsKey("Description"))
-        {
-            fields["Description"] = descText;
-            fieldEntries.Add(new("Description", descText));
-        }
+        foreach (var node in el.Nodes().OfType<XText>())
+            asm.AppendDescriptionText(node.Value);
 
-        var element = new RulesElement
-        {
-            InternalId = internalId,
-            Name = name,
-            Type = type,
-            Source = source,
-            Prereqs = prereqs,
-            Fields = fields,
-            FieldEntries = fieldEntries,
-            Rules = rules,
-        };
-
-        return new ParsedElement(element, categories);
+        return asm.Build(internalId, name, type, source);
     }
 
-    private static void ParseCategories(XElement categoryEl, List<string> categories)
+    /// <summary>
+    /// <see cref="IRuleChildNode"/> adapter over a LINQ-to-XML child element.
+    /// </summary>
+    private readonly struct XElementChildNode(XElement el) : IRuleChildNode
     {
-        string content = categoryEl.Value.Trim();
-        if (string.IsNullOrWhiteSpace(content)) return;
-        foreach (var cat in content.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            categories.Add(cat);
+        public string LocalName => el.Name.LocalName;
+        public string? Attr(string name) => el.Attribute(name)?.Value;
+        public string GetTextContent() => el.Value.Trim();
+        public void ParseRulesBlockInto(List<RuleDirective> rules) => ParseRulesBlock(el, rules);
     }
 
     private static void ParseRulesBlock(XElement rulesEl, List<RuleDirective> rules)
     {
         foreach (var child in rulesEl.Elements())
         {
+            var node = new XElementRuleNode(child);
             RuleDirective? directive = child.Name.LocalName switch
             {
-                "statadd" => ParseStatAdd(child),
-                "grant" => ParseGrant(child),
-                "modify" => ParseModify(child),
+                "statadd" => RuleDirectiveParser.ParseStatAdd(node),
+                "grant" => RuleDirectiveParser.ParseGrant(node),
+                "modify" => RuleDirectiveParser.ParseModify(node),
                 "select" => ParseSelect(child),
-                "replace" => ParseReplace(child),
-                "drop" => ParseDrop(child),
-                "suggest" => ParseSuggest(child),
-                "textstring" => ParseTextString(child),
-                "statalias" => ParseStatAlias(child),
+                "replace" => RuleDirectiveParser.ParseReplace(node),
+                "drop" => RuleDirectiveParser.ParseDrop(node),
+                "suggest" => RuleDirectiveParser.ParseSuggest(node),
+                "textstring" => RuleDirectiveParser.ParseTextString(node),
+                "statalias" => RuleDirectiveParser.ParseStatAlias(node),
                 _ => null,
             };
             if (directive is not null)
@@ -546,78 +653,6 @@ public static partial class PartMerger
         };
     }
 
-    private static ReplaceDirective ParseReplace(XElement el)
-    {
-        return new ReplaceDirective
-        {
-            Name = Attr(el, "name"),
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Multiclass = Attr(el, "multiclass"),
-            PowerSwap = Attr(el, "powerswap"),
-            PowerReplace = Attr(el, "power-replace"),
-            Optional = ParseBool(Attr(el, "optional")),
-            Requires = Attr(el, "requires"),
-        };
-    }
-
-    private static DropDirective ParseDrop(XElement el)
-    {
-        return new DropDirective
-        {
-            SelectSlot = Attr(el, "select"),
-            Name = Attr(el, "name"),
-            ElementType = Attr(el, "type"),
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
-        };
-    }
-
-    private static SuggestDirective? ParseSuggest(XElement el)
-    {
-        string? name = Attr(el, "name");
-        string? type = Attr(el, "type");
-        if (name is null || type is null) return null;
-
-        return new SuggestDirective
-        {
-            Name = name,
-            ElementType = type,
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
-        };
-    }
-
-    private static TextStringDirective? ParseTextString(XElement el)
-    {
-        string? name = Attr(el, "name");
-        string? value = Attr(el, "value");
-        if (name is null || value is null) return null;
-
-        return new TextStringDirective
-        {
-            Name = name,
-            Value = value,
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
-            Condition = Attr(el, "condition"),
-        };
-    }
-
-    private static StatAliasDirective? ParseStatAlias(XElement el)
-    {
-        string? name = Attr(el, "name");
-        string? alias = Attr(el, "alias");
-        if (name is null || alias is null) return null;
-
-        return new StatAliasDirective
-        {
-            Name = name,
-            Alias = alias,
-            Level = ParseIntOrNull(AttrCI(el, "Level", "level")),
-            Requires = Attr(el, "requires"),
-        };
-    }
-
     // ========================================================================
     // Helpers
     // ========================================================================
@@ -627,31 +662,12 @@ public static partial class PartMerger
     private static string? AttrCI(XElement el, string upper, string lower) =>
         el.Attribute(upper)?.Value ?? el.Attribute(lower)?.Value;
 
-    private static int? ParseIntOrNull(string? value) =>
-        int.TryParse(value, out int result) ? result : null;
-
-    private static bool ParseBool(string? value) =>
-        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-
     private static void Execute(SqliteConnection conn, string sql)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
     }
-
-    private static string NormalizeDescription(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
-        var lines = raw.Replace('\t', ' ')
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(l => WhitespaceRegex().Replace(l, " ").Trim())
-            .Where(l => l.Length > 0);
-        return string.Join("\n", lines);
-    }
-
-    [GeneratedRegex(@"\s+")]
-    private static partial Regex WhitespaceRegex();
 }
 
 /// <summary>
@@ -663,3 +679,10 @@ public sealed record MergeResult(
     int ElementsUpdated,
     int ElementsDeleted,
     int NodesAppended);
+
+/// <summary>
+/// A single part file to merge, with its stable id and category. Used by
+/// <see cref="PartMerger.MergeFiles"/> so callers control the exact set and
+/// order of parts applied (e.g. the layered rebuild service).
+/// </summary>
+public sealed record PartSourceFile(string Path, string PartId, string? Category, bool IsOfficial = false);

@@ -42,6 +42,13 @@ public abstract class SummaryBlock
     }
 
     /// <summary>
+    /// Split a comma-separated line into trimmed tokens. Empty tokens are kept
+    /// (trimmed to ""), matching the prior <c>Split(',').Select(Trim)</c> blocks.
+    /// </summary>
+    protected static string[] SplitCommaTokens(string line) =>
+        line.Split(',', StringSplitOptions.TrimEntries);
+
+    /// <summary>
     /// Format the OCB " (replaces &lt;OldName&gt; @ &lt;RetrainAtSource&gt;)"
     /// retraining marker. Returns empty string when there's nothing to mark.
     /// </summary>

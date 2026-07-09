@@ -13,7 +13,7 @@ namespace CharM.Engine.CharacterModel;
 /// aggregated <c>Companion.*</c> ability stats, and the OCB
 /// <c>_COMPANION_NAME</c> / <c>_COMPANION_APPEARANCE</c> text strings.
 /// </summary>
-public sealed record CompanionData(
+public sealed partial record CompanionData(
     string Category,
     string? Name,
     string? Appearance,
@@ -73,6 +73,22 @@ public sealed record CompanionData(
                 ?? ParseInt(baseCompanion.Fields.GetValueOrDefault(ability))
                 ?? 10;
 
+        // HoFK Sentinel / "shares your stats" companions (Wolf, Bear, ...)
+        // carry BASE defense/attack values in their fields and follow the
+        // rules text "its hit points, defenses, and attacks are determined
+        // by your level": defenses and attack bonus add the character level,
+        // HP equals the character's bloodied value, and it shares the
+        // character's healing surges. These companions are identified
+        // structurally — they have no paired Animal-Master power card and no
+        // explicit "Hit Points at 1st Level" field (which the FMP mounts and
+        // Animal-Master companions use to carry their own level-correct
+        // stats). This keeps Sterling's Animal-Master cat and the FMP mounts
+        // on their existing, already-correct path.
+        bool sharesYourStats = powerCard is null
+            && !baseCompanion.Fields.ContainsKey("Hit Points at 1st Level");
+
+        int? charHp = stats?.TryGetStat("Hit Points")?.ComputeValue(stats);
+
         var defenses = ParseDefenses(GetOverlaidField(powerCard, overlay, "Defenses"));
         if (defenses.IsEmpty)
         {
@@ -93,6 +109,46 @@ public sealed record CompanionData(
         if (surge is not null)
             surge = surge.Replace(" Surges per day", " surges per day", StringComparison.Ordinal);
 
+        int? attackBonus = ParseInt(baseCompanion.Fields.GetValueOrDefault("Attack Bonus"));
+        string? powerName = NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Companion Power"));
+        string? powerText = NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Power"));
+
+        if (sharesYourStats)
+        {
+            // Defenses and attack bonus add character level.
+            defenses = new ParsedDefenses(
+                defenses.Ac is { } a ? a + characterLevel : null,
+                defenses.Fortitude is { } f ? f + characterLevel : null,
+                defenses.Reflex is { } r ? r + characterLevel : null,
+                defenses.Will is { } w ? w + characterLevel : null);
+            if (attackBonus is { } ab) attackBonus = ab + characterLevel;
+
+            // HP = character's bloodied value (half max HP).
+            if (charHp is { } chp && chp > 0) hp = chp / 2;
+
+            // Shares the character's healing surges: companion surge value is
+            // half the character's surge value (= floor(maxHP / 8)), and it
+            // has 0 surges per day of its own. Mirrors OCB's Beast block,
+            // e.g. char HP 50 -> "6 (0 surges per day)".
+            if (charHp is { } chp2 && chp2 > 0)
+            {
+                int companionSurgeValue = (chp2 / 4) / 2;
+                surge = $"{companionSurgeValue} (0 surges per day)";
+            }
+
+            // OCB splits a "Name (Aura N): description" Power field into the
+            // BeastPower (name + colon) and BeastPowerText (description).
+            if (powerName is null && powerText is { } pt)
+            {
+                int colon = pt.IndexOf(':');
+                if (colon > 0)
+                {
+                    powerName = pt[..(colon + 1)].Trim();
+                    powerText = pt[(colon + 1)..].Trim();
+                }
+            }
+        }
+
         return new CompanionData(
             Category: baseCompanion.Name,
             Name: NullIfBlank(customName),
@@ -112,7 +168,7 @@ public sealed record CompanionData(
             HitPointsText: null,
             HitPointsNote: null,
             HealingSurgeText: surge,
-            AttackBonus: ParseInt(baseCompanion.Fields.GetValueOrDefault("Attack Bonus")),
+            AttackBonus: attackBonus,
             // OCB's Beast block reads the attack-name (e.g. "Claw") from the
             // BASE companion's "Attack" field — not from the powerCard's
             // overlaid "Attack" field, which holds the verbose "Beast's
@@ -128,8 +184,8 @@ public sealed record CompanionData(
             Vision: NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Vision")
                 ?? baseCompanion.Fields.GetValueOrDefault("Senses")),
             TrainedSkills: ResolveTrainedSkillNames(baseCompanion.Fields.GetValueOrDefault("Trained Skills"), findById),
-            PowerName: NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Companion Power")),
-            PowerText: NullIfBlank(baseCompanion.Fields.GetValueOrDefault("Power")),
+            PowerName: powerName,
+            PowerText: powerText,
             ExtraPowers: Array.Empty<CompanionExtraPower>(),
             IsMinion: false,
             IsSummon: false,
@@ -323,6 +379,42 @@ public sealed record CompanionData(
             return true;
         return element.Fields.ContainsKey("Constant Benefits")
                && element.Fields.ContainsKey("Secondary Speed");
+    }
+
+    private static readonly string[] CompanionDefenseFields =
+        ["Armor Class", "Fortitude Defense", "Reflex Defense", "Will Defense"];
+
+    /// <summary>
+    /// True when a <c>type="Companion"</c> element carries a renderable
+    /// creature stat block (its own ability scores plus a defense or attack
+    /// stat), as opposed to a per-level overlay stub that only holds
+    /// <c>Short Description</c> / <c>Associated Power(s)</c>.
+    ///
+    /// <para>This is the GENERAL signal the mini-sheet pipeline keys on,
+    /// replacing the historical over-gate on the single
+    /// <c>"Hit Points at 1st Level"</c> field (which only the two FMP mount
+    /// companions, Horse and Simian, happened to carry). The structural
+    /// signature — ability scores + (defense | attack) — is shared by every
+    /// base companion regardless of its id family: the HoFK Sentinel
+    /// Wolf/Bear (<c>ID_WOG_COMPANION_*</c>), the FMP mounts
+    /// (<c>ID_FMP_COMPANION_*</c>), and any future stat-block companion.
+    /// The 1781 Tivaan per-level overlay stubs
+    /// (<c>ID_TIV_FEAT_ANIMAL_COMPANION-*</c>) carry no ability or defense
+    /// fields and are correctly excluded (they remain placeholder
+    /// Beast-block clones for OCB export parity).</para>
+    /// </summary>
+    public static bool IsBaseStatBlockCompanion(RulesElement element)
+    {
+        if (!string.Equals(element.Type, "Companion", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        bool hasAbilities = AbilityNames.FullNames.Any(element.Fields.ContainsKey)
+            || element.Fields.ContainsKey("Hit Points at 1st Level");
+        bool hasDefense = CompanionDefenseFields.Any(element.Fields.ContainsKey);
+        bool hasAttack = element.Fields.ContainsKey("Attack Bonus")
+            || element.Fields.ContainsKey("Damage");
+
+        return hasAbilities && (hasDefense || hasAttack);
     }
 
     /// <summary>
@@ -554,7 +646,7 @@ public sealed record CompanionData(
         if (string.IsNullOrWhiteSpace(source))
             return abilities;
 
-        foreach (Match m in AbilityPattern.Matches(source))
+        foreach (Match m in AbilityPattern().Matches(source))
         {
             string abbr = m.Groups[1].Value;
             if (int.TryParse(m.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int score))
@@ -713,7 +805,7 @@ public sealed record CompanionData(
             var line = rawLine.Trim();
             if (string.IsNullOrEmpty(line)) continue;
 
-            var matches = AbilityPattern.Matches(line);
+            var matches = AbilityPattern().Matches(line);
             if (matches.Count > 0)
             {
                 foreach (Match m in matches)
@@ -886,41 +978,33 @@ public sealed record CompanionData(
         _ => abbr,
     };
 
-    private static readonly Regex AbilityPattern = new(
-        @"\b(Str|Con|Dex|Int|Wis|Cha):?\s+(\d+)\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"\b(Str|Con|Dex|Int|Wis|Cha):?\s+(\d+)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex AbilityPattern();
 
     /// <summary>Compute the ability modifier (4e: floor((score - 10) / 2)).</summary>
     public int Mod(int score) => (score - 10) / 2;
 
     // Patterns for resolving companion template text
-    private static readonly Regex YourLevelPlusN = new(
-        @"your level\s*\+\s*(\d+)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"your level\s*\+\s*(\d+)", RegexOptions.IgnoreCase)]
+    private static partial Regex YourLevelPlusN();
 
-    private static readonly Regex YourLevelBare = new(
-        @"\byour level\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"\byour level\b", RegexOptions.IgnoreCase)]
+    private static partial Regex YourLevelBare();
 
-    private static readonly Regex YourAbilityModifier = new(
-        @"your (Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) modifier",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"your (Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) modifier", RegexOptions.IgnoreCase)]
+    private static partial Regex YourAbilityModifier();
 
-    private static readonly Regex YourHighestAbilityModifier = new(
-        @"your highest ability modifier",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"your highest ability modifier", RegexOptions.IgnoreCase)]
+    private static partial Regex YourHighestAbilityModifier();
 
-    private static readonly Regex OneHalfYourLevel = new(
-        @"one-half your level",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(@"one-half your level", RegexOptions.IgnoreCase)]
+    private static partial Regex OneHalfYourLevel();
 
-    private static readonly Regex EqualToYoursPlusN = new(
-        @"[Ee]qual to yours\s*\+\s*(\d+)",
-        RegexOptions.Compiled);
+    [GeneratedRegex(@"[Ee]qual to yours\s*\+\s*(\d+)")]
+    private static partial Regex EqualToYoursPlusN();
 
-    private static readonly Regex EqualToYours = new(
-        @"[Ee]qual to yours",
-        RegexOptions.Compiled);
+    [GeneratedRegex(@"[Ee]qual to yours")]
+    private static partial Regex EqualToYours();
 
     /// <summary>
     /// Resolve template expressions in companion text against the
@@ -944,20 +1028,20 @@ public sealed record CompanionData(
         Dictionary<string, int> characterAbilities)
     {
         // "your level + N" → computed
-        var result = YourLevelPlusN.Replace(text, m =>
+        var result = YourLevelPlusN().Replace(text, m =>
         {
             int bonus = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
             return $"{characterLevel + bonus}";
         });
 
         // "one-half your level" → floor(level / 2)
-        result = OneHalfYourLevel.Replace(result, _ => $"{characterLevel / 2}");
+        result = OneHalfYourLevel().Replace(result, _ => $"{characterLevel / 2}");
 
         // "your level" (bare, after + N already replaced) → level
-        result = YourLevelBare.Replace(result, $"{characterLevel}");
+        result = YourLevelBare().Replace(result, $"{characterLevel}");
 
         // "your Wisdom modifier" etc. → character's mod
-        result = YourAbilityModifier.Replace(result, m =>
+        result = YourAbilityModifier().Replace(result, m =>
         {
             string abilityName = m.Groups[1].Value;
             int score = characterAbilities.GetValueOrDefault(abilityName, 10);
@@ -966,7 +1050,7 @@ public sealed record CompanionData(
         });
 
         // "your highest ability modifier" → max of character's mods
-        result = YourHighestAbilityModifier.Replace(result, _ =>
+        result = YourHighestAbilityModifier().Replace(result, _ =>
         {
             int maxMod = characterAbilities.Count > 0
                 ? characterAbilities.Values.Max(s => (s - 10) / 2)
@@ -986,14 +1070,14 @@ public sealed record CompanionData(
         if (string.IsNullOrWhiteSpace(text) || characterStatValue is null)
             return text;
 
-        var plusMatch = EqualToYoursPlusN.Match(text);
+        var plusMatch = EqualToYoursPlusN().Match(text);
         if (plusMatch.Success)
         {
             int bonus = int.Parse(plusMatch.Groups[1].Value, CultureInfo.InvariantCulture);
             return $"{characterStatValue.Value + bonus}";
         }
 
-        if (EqualToYours.IsMatch(text))
+        if (EqualToYours().IsMatch(text))
             return $"{characterStatValue.Value}";
 
         return text;

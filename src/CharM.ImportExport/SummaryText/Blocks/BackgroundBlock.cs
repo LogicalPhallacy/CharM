@@ -66,7 +66,7 @@ internal sealed class BackgroundBlock : SummaryBlock
                 string headCandidate = body[..lastOpen].TrimEnd();
                 string parenCandidate = body[(lastOpen + 1)..^1];
                 // Heuristic: split commas in head, try every token as a Background.
-                var headTokens = headCandidate.Split(',').Select(t => t.Trim()).ToList();
+                var headTokens = SplitCommaTokens(headCandidate);
                 if (headTokens.All(t => database.FindByNameAndType(t, "Background") is not null))
                 {
                     body = headCandidate;
@@ -76,7 +76,7 @@ internal sealed class BackgroundBlock : SummaryBlock
         }
 
         // Resolve background tokens.
-        var tokens = body.Split(',').Select(t => t.Trim()).ToList();
+        var tokens = SplitCommaTokens(body);
         var resolved = new List<CharM.Engine.Rules.RulesElement>();
         foreach (var t in tokens)
         {
