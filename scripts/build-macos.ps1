@@ -78,7 +78,7 @@ switch ($Arch) {
         $rid = "maccatalyst-$Arch"
         Write-Host "==> Publishing CharM.Maui for net10.0-maccatalyst ($rid only)"
         $publishArgs += "-p:RuntimeIdentifier=$rid"
-        $publishArgs += "-p:RuntimeIdentifiers=$rid"
+        #$publishArgs += "-p:RuntimeIdentifiers=$rid"
     }
 }
 

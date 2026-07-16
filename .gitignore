@@ -59,3 +59,6 @@ src/CharM.Web.UI/wwwroot/js/three.module.js
 src/CharM.Web.UI/wwwroot/tailwind.css
 .tailwind/
 scripts/out/
+
+# macOS
+.DS_Store
