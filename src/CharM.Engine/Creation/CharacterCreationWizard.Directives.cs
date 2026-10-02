@@ -16,59 +16,12 @@ public sealed partial class CharacterCreationWizard
     /// Based on the ScreenOfChoice routing from the original CB.
     /// </summary>
     internal static WizardStep MapTypeToStep(string elementType) =>
-        elementType.ToLowerInvariant() switch
-        {
-            "race" or "racial trait" or "countsasrace" => WizardStep.Race,
-            "class" or "class feature" or "hybrid class" or "proficiency"
-                or "class build" or "trait package" or "god fragment" or "magic item"
-                or "companion" or "theme"
-                => WizardStep.Class,
-            "paragon path" => WizardStep.ParagonPath,
-            "epic destiny" => WizardStep.EpicDestiny,
-            "background" or "background choice" or "campaign setting" => WizardStep.Background,
-            "skill training" => WizardStep.Skills,
-            "feat" => WizardStep.Feats,
-            "power" => WizardStep.Powers,
-            "race ability bonus" or "ability scores" => WizardStep.AbilityScores,
-            "language" => WizardStep.Race,
-            _ when elementType.StartsWith("Ability Score", StringComparison.OrdinalIgnoreCase)
-                => WizardStep.AbilityScores,
-            _ => WizardStep.Details,
-        };
+        ChoiceTypeCatalog.Describe(elementType).Step;
 
     // --- Private implementation ---
 
-    /// <summary>
-    /// Type priority ordering from the original CB's type_order array.
-    /// Lower index = higher priority in NextStep routing.
-    /// </summary>
-    private static readonly string[] TypeOrder =
-    [
-        "race",               // 0
-        "hybrid class",       // 1
-        "paragon path",       // 2
-        "epic destiny",       // 3
-        "class feature",      // 4
-        "class",              // 5
-        "class build",        // 6
-        "trait package",      // 7
-        "proficiency",        // 8
-        "ability scores",     // 9
-        "skill training",     // 10
-        "racial trait",       // 11
-        "race ability bonus", // 12
-        "background",         // 13
-        "feat",               // 14
-        "power",              // 15
-        "language",           // 16
-    ];
-
-    private static int GetTypeSortOrder(string type)
-    {
-        int idx = Array.FindIndex(TypeOrder, t =>
-            string.Equals(t, type, StringComparison.OrdinalIgnoreCase));
-        return idx >= 0 ? idx : TypeOrder.Length;
-    }
+    private static int GetTypeSortOrder(string type) =>
+        ChoiceTypeCatalog.Describe(type).SortOrder;
 
     private void InitializeLevel()
     {

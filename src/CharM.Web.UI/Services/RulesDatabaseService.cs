@@ -449,6 +449,9 @@ public sealed class RulesDatabaseService : IRulesDatabase
     public IEnumerable<string> GetDistinctSources()
         => Current.GetDistinctSources();
 
+    public IReadOnlyList<ChoiceTypeOccurrence> GetChoiceTypes()
+        => Current.GetChoiceTypes();
+
     public IReadOnlyList<PartLayer> GetPartLayers()
         => Current.GetPartLayers();
 

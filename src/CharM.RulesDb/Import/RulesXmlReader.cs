@@ -40,7 +40,14 @@ public static partial class RulesXmlReader
         {
             if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "RulesElement")
             {
-                var parsed = ReadRulesElement(reader);
+                // Give the element parser a reader whose boundary is this one
+                // RulesElement. Some child-reading APIs advance to the node after
+                // the child end tag; without this boundary that node can be the
+                // parent end tag, and the parent's next Read() can consume the
+                // following top-level RulesElement as though it were still a child.
+                using var elementReader = reader.ReadSubtree();
+                elementReader.Read();
+                var parsed = ReadRulesElement(elementReader);
                 if (parsed is not null)
                     yield return parsed;
             }

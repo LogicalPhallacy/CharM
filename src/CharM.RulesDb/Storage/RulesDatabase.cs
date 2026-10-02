@@ -20,6 +20,16 @@ public interface IRulesDatabase : IDisposable
     IEnumerable<RulesElement> FindByTypeAndSource(string type, string source);
     IEnumerable<RulesElement> FindByTypeAndSource(string type, string source, bool includeRules);
     IEnumerable<string> GetDistinctSources();
+    /// <summary>
+    /// Discovers select-directive element types in the assembled working corpus,
+    /// including enabled overlays. This is independent of built-in wizard routing.
+    /// Results are ordered and deduplicated using ordinal case-insensitive comparison;
+    /// the ordinal-smallest observed spelling represents each type.
+    /// Null, empty, malformed or non-array JSON records and invalid select type fields
+    /// are skipped. Counts measure directives, not requested choices or elements.
+    /// Results are cached for this opened database; reopen after a rebuild or swap.
+    /// </summary>
+    IReadOnlyList<ChoiceTypeOccurrence> GetChoiceTypes();
     int Count { get; }
 
     /// <summary>
@@ -55,6 +65,11 @@ public sealed record PartLayer(
     int LayerOrder,
     bool IsBase);
 
+/// <summary>A choice-slot type observed in the loaded rules corpus.</summary>
+/// <param name="ElementType">Deterministic representative spelling from the corpus.</param>
+/// <param name="OccurrenceCount">Number of select directives using this type, ignoring case.</param>
+public sealed record ChoiceTypeOccurrence(string ElementType, int OccurrenceCount);
+
 /// <summary>
 /// SQLite-backed implementation of <see cref="IRulesDatabase"/>.
 /// </summary>
@@ -72,6 +87,7 @@ public sealed class RulesDatabase : IRulesDatabase
     private readonly ConcurrentDictionary<string, IReadOnlyList<RulesElement>> _byTypeAndSource =
         new(StringComparer.OrdinalIgnoreCase);
     private string[]? _distinctSourcesCache;
+    private IReadOnlyList<ChoiceTypeOccurrence>? _choiceTypesCache;
     private int? _countCache;
 
     private static JsonSerializerOptions CreateJsonOptions()
@@ -411,6 +427,69 @@ public sealed class RulesDatabase : IRulesDatabase
 
             _distinctSourcesCache = [.. sources];
             return _distinctSourcesCache;
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<ChoiceTypeOccurrence> GetChoiceTypes()
+    {
+        lock (_queryLock)
+        {
+            if (_choiceTypesCache is not null)
+                return _choiceTypesCache;
+
+            var types = new Dictionary<string, ChoiceTypeOccurrence>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT rules_json FROM rules_elements WHERE rules_json IS NOT NULL";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var json = reader.GetString(0);
+                if (string.IsNullOrWhiteSpace(json))
+                    continue;
+
+                try
+                {
+                    // Project only the converter's select discriminator/type fields.
+                    // Unrelated or future directive payloads need not deserialize.
+                    using var document = JsonDocument.Parse(json);
+                    if (document.RootElement.ValueKind != JsonValueKind.Array)
+                        continue;
+
+                    foreach (var directive in document.RootElement.EnumerateArray())
+                    {
+                        if (directive.ValueKind != JsonValueKind.Object
+                            || !directive.TryGetProperty("$type", out var kind)
+                            || kind.ValueKind != JsonValueKind.String
+                            || kind.GetString() != "select"
+                            || !directive.TryGetProperty("elementType", out var type)
+                            || type.ValueKind != JsonValueKind.String)
+                            continue;
+
+                        var elementType = type.GetString()!;
+                        if (string.IsNullOrWhiteSpace(elementType))
+                            continue;
+
+                        if (types.TryGetValue(elementType, out var existing))
+                        {
+                            var spelling = StringComparer.Ordinal.Compare(elementType, existing.ElementType) < 0
+                                ? elementType : existing.ElementType;
+                            types[elementType] = new(spelling, existing.OccurrenceCount + 1);
+                        }
+                        else
+                            types.Add(elementType, new(elementType, 1));
+                    }
+                }
+                catch (JsonException)
+                {
+                    // A corrupt element must not prevent discovery from the rest of the corpus.
+                }
+            }
+
+            _choiceTypesCache = Array.AsReadOnly(types.Values
+                .OrderBy(type => type.ElementType, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
+            return _choiceTypesCache;
         }
     }
 
